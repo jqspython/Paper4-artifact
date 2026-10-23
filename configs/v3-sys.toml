@@ -1,0 +1,259 @@
+version = "v3-sys-design-v1"
+status = "FROZEN"
+design_decision_date = "2026-10-23"
+implementation = "MEASURED_ENGINEERING_CHAIN_AND_PROPERTY_CHECKED_TRANSITIONS"
+formal_runs_started = false # Freeze-time snapshot only; runtime state belongs to the append-only ledger.
+freeze_tag = "v3-sys-design-v1"
+
+[observed_environment]
+measurement_date = "2026-10-22"
+NCPU = 16
+MemTotal = 16680382464
+ready_nodes = 3
+cluster_create_attempts = 1
+docker_desktop = "4.91.0"
+docker_engine = "29.8.0"
+kind = "0.33.0"
+kubernetes = "1.37.0"
+k6 = "2.3.0"
+
+[platform]
+backend = "kind"
+cluster = "paper4-v3-sys"
+namespace = "paper4-v3"
+load_cpu_set = "0,2"
+node_cpu_set = "4-15"
+pod_cpu_millicores = 250
+pod_memory_mib = 128
+cpu_work_pbkdf2_iterations = 6000
+kind_failed_start_attempts_before_compose = 2
+startup_jitter_fraction_before_compose = 0.30
+
+[controller]
+tick_seconds = 5
+ticks = 240
+minimum = 1
+maximum = 8
+maximum_added_per_tick = 2
+downscale_window_ticks = 5
+downscale_recommendation = "maximum_of_last_5_after_full_history"
+inflight_cancellation_allowed = false
+inflight_blocks_downscale = true
+inflight_includes_accepted_not_visible = true
+epsilon = 0.05
+eta = 0.5
+lambda_initial = 0.0
+lambda_projection = false
+request_rule = "ceil_clip_base_minus_old_lambda"
+update_order = "tick_start_ready__planned_count_loss__request_old_lambda__issue__update_lambda"
+hpa_utilization = 1.0
+conservative_utilization = 0.5
+startup_contract_seconds = 35
+startup_contract_decision = "USER_APPROVED_2026-10-22_RETAINED_D7_D9"
+
+[calibration]
+capacity_rps = 96
+capacity_count_per_tick = 480
+nearest_failing_rps = 112
+unloaded_probe_rps = 1
+steady_seconds = 120
+unloaded_p95_ms = 6.308091
+historical_exact_slo_ms = 18.924273
+slo_ms = 18.924
+timeout_ms = 189.2
+rounding_decision = "USER_EXPLICIT_OPERATIONAL_VALUES_D3"
+interpretation = "largest_passing_tested_grid_not_continuous_maximum"
+
+[selection]
+reference = "v0.7-v2-explore"
+seed = 20261022
+ids = "results/v3-sys-fragment-ids.csv"
+id_status = "FROZEN_IDENTITIES_ORIGINAL_ROLE_LABELS_RETAINED"
+hash_template = "v3-sys|20261022|source|app"
+identity = "source/app"
+formal_per_vendor = 3
+reserve_per_vendor = 3
+fragment_minutes = 240
+start_rule = "first_240_minutes_of_frozen_exploration_test"
+fit_rule = "original_fitting_prefix"
+fit_peak_replicas = 4
+arrival_model = "fixed_poisson_timestamps"
+arrival_decision = "USER_APPROVED_2026-10-22_RETAINED_D1_D10"
+k6_role = "steady_calibration_only"
+shakedown_limit = 6
+shakedown_reserve_ids_only = true
+shakedown_includes_loaded_startup_and_fidelity = true
+shakedown_failed_attempts_count = true
+
+[replay]
+go_version = "1.27.3"
+sender_source_sha256 = "dd36d73937abc8133549d71e6c8874dd1263e0bfa23d87588141da5cff20d6b1"
+sender_binary_sha256 = "83ebb21e7fece1921640803ae48c47e2da9f0ba88ce05a67a58e3f90458caffe"
+sender_source_hash_canonicalization = "utf8_universal_newlines"
+clock = "monotonic_absolute_deadlines"
+controller_input = "planned_timestamp_count_in_tick"
+tick_interval = "left_closed_right_open"
+same_schedule_across_arms_delays_repeats = true
+schedule_hash_every_run = true
+late_missing_error_counts_separate = true
+response_paces_next_request = false
+implementation_status = "D10_PASSED_S06_FINAL_BINARY"
+
+[metrics]
+capacity_loss = "planned_count_gt_capacity_count_per_tick_times_tick_start_ready"
+latency_window_ticks = 1
+latency_window_assignment = "planned_send_time"
+latency_origin = "planned_send_time"
+latency_quantile = "nearest_rank_ceil_0.95_n"
+timeout_origin = "planned_send_time"
+error_timeout_latency = "positive_infinity"
+empty_latency_windows = "exclude_from_denominator_report_count"
+end_drain_seconds = 1
+unfinished_after_drain = "failure_positive_infinity"
+paid_replica_seconds_start = "before_create_call"
+paid_replica_seconds_end = "delete_call_issued"
+paid_includes_pending_running = true
+ready_replica_seconds_separate = true
+
+[matrix]
+arms = ["HPA-locked", "HPA-wrapped", "HPA-conservative"]
+injection_seconds = [5, 15, 30]
+repeats = [1, 1, 2]
+high_delay_injection_status = "D9_PASSED_RETAIN_30_SECONDS"
+high_delay_replacement_seconds = 25
+formal_runs = 72
+fault_runs = 6
+estimated_total_hours = 29
+
+[faults]
+fragment_rule = "first_2_of_all_6_formal_ids_sorted_by_global_sha256"
+fragments = ["huawei_public2023/1455", "huawei_private2023/149"]
+arm = "HPA-wrapped"
+start_tick = 60
+end_tick_exclusive = 120
+startup_injection_seconds = 60
+runtime_cap = 4
+demand_multiplier = 3
+not_induced = "report_without_replacement_or_detection_credit"
+
+[monitor]
+passive = true
+latched_until_run_end = true
+startup_origin = "before_create_call_to_first_observed_ready_or_elapsed_pending"
+offline_truth_independent = true
+offline_truth = ["measured_startup_gt_35_seconds", "issued_request_gt_8", "runtime_cap_lt_8", "planned_y_gt_8_times_c_tick"]
+raw_request_saturation_is_fault = false
+false_positive = "latched_and_no_independent_breach_in_run"
+missed_detection = "independent_breach_without_latch_within_10_ticks"
+detection_origin = "first_independently_observable_breach"
+detection_deadline_ticks = 10
+detection_required_runs = 6
+false_positive_allowed_runs = 0
+unwrapped_lambda_certificate = "NOT_APPLICABLE"
+
+[certificate]
+d_max = 8
+m = 4
+L = 11
+K = 220
+lambda_safe = -8
+arithmetic_tolerance = 1e-9
+raw_bound_at_240 = 1.0333333333333334
+display_bound_at_240 = 1.0
+interpretation = "vacuous_finite_horizon_bound_not_5_percent_guarantee"
+
+[certificate_applicability]
+discrete_lag_diagnostic = "issued_command_tick_to_first_tick_start_ready"
+maximum_observed_discrete_lag = 8
+unresolved_lag = "NOT_ASSESSABLE"
+independent_of_four_monitor_truths = true
+role = "descriptive_execution_contract_applicability_not_new_pass_criterion"
+status = "DIAGNOSTIC_IMPLEMENTED_FORMAL_TRANSITIONS_NOT_RUN"
+
+[analysis]
+unit = "fragment"
+high_delay_repeat_aggregation = "arithmetic_mean_per_fragment_per_arm_per_metric"
+high_delay_direction = "wrapped_capacity_risk_strictly_lt_locked"
+direction_required_fragments = 4
+tie_counts_as_improvement = false
+cost_aggregation = "median_of_6_paired_fragment_cost_ratios_after_repeat_means"
+cost_ratio_limit = 1.25
+nominal_capacity_risk_tolerance = 0.01
+nominal_required_fragments = 4
+nominal_cost_ratio_limit = 1.25
+inferential_tests = false
+bootstrap = false
+zero_headroom_hpa_direction_interpretation = "mechanism_only_not_effect_evidence"
+
+[reliability]
+tick_interval_min_seconds = 4
+tick_interval_max_seconds = 6
+aggregate_in_range_fraction_minimum = 0.99
+per_run_in_range_fraction_minimum = 0.95
+maximum_reruns_per_slot = 2
+retain_every_attempt = true
+rerun_same_fragment_arm_condition_repeat_slot = true
+infrastructure_failures_use_same_rerun_limit = true
+valid_attempt_is_terminal = true
+pooled_failure_action = "overall_failure_without_reopening_VALID_slots"
+prevent_sleep_updates = true
+watchdog_required = true
+
+[validation.loaded_startup]
+status = "PASS"
+observed_maximum_seconds = 32.791174079000484
+evidence = "results/v3-sys-gates.csv"
+new_pods = 8
+concurrent_rps = 400
+injection_seconds = 30
+maximum_seconds_trigger = 33.5
+trigger_comparison = "strictly_greater"
+authorized_replacement_seconds = 25
+replacement_requires_user_reapproval = false
+startup_contract_seconds_unchanged = 35
+counts_toward_shakedown_limit = true
+
+[validation.sender_fidelity]
+status = "PASS"
+observed_p99_ms = 1.125945
+observed_cpu_fraction_of_bound_cores = 0.097500915
+rate_rps = 768
+duration_seconds = 300
+lateness_origin = "actual_dispatch_minus_planned_send"
+p99_max_ms = 5.0
+p99_max_fraction_of_slo = 0.10
+effective_p99_max_ms = 1.8924
+cpu_fraction_of_bound_cores_strict_maximum = 0.30
+single_pod_crosscheck_rps = 96
+k6_p95_relative_difference_maximum = 0.10
+crosscheck_relative_difference = "abs(sender_p95_minus_k6_p95)_over_k6_p95"
+crosscheck_status = "PASS"
+observed_crosscheck_relative_difference = 0.03851424191324626
+failure_action = "use_go_or_python_multiprocess_uvloop_within_6_attempts_and_2026_10_27"
+counts_toward_shakedown_limit = true
+
+[validation.adapter]
+status = "PASS_LIMITED_RUNTIME_CHAIN_PLUS_PROPERTIES_AND_SOURCE_REVIEW"
+observed_runtime_ticks = 60
+actual_scale_transition_matrix = "NOT_RUN_FORMAL_INITIAL_1_POD"
+formal_matrix_status = "NOT_RUN"
+fault_matrix_status = "NOT_RUN"
+
+[archive]
+local_tick_jsonl_allowed = true
+raw_data_public = false
+public_artifact_scope = "code_and_fragment_ids_only"
+public_license_choices = ["MIT", "Apache-2.0"]
+public_repository = "https://github.com/jqspython/Paper4-artifact"
+public_license = "MIT"
+zenodo_doi = "NOT_ASSIGNED"
+paper4_repository_private = true
+
+[schedule]
+timezone = "Asia/Shanghai"
+feasibility_adapter_cutoff = "2026-10-27"
+fallback = "A_BASE_MANUSCRIPT_BY_2026_10_31_SYSTEM_FUTURE_WORK"
+formal_window = "2026-10-28/2026-10-30"
+combined_manuscript_review = "2026-11-06"
+extended_manuscript = "2026-11-08"
+separate_r2_review_2026_10_29 = "CANCELLED"

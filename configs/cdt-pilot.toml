@@ -1,0 +1,63 @@
+[experiment]
+trace = "data/processed/pilot.csv"
+epsilon = 0.05
+assumed_delay_seconds = 60
+delay_contract_seconds = 180
+fit_peak_replicas = 8
+envelope_replicas = 16
+
+[forecast]
+seed = 17
+rounds = 100
+num_leaves = 15
+
+[search]
+trials_per_method = 8
+cdt_eta = [0.05, 0.1, 0.2, 0.4, 0.8, 1.6, 3.2, 6.4]
+hpa_utilization = [0.4, 0.55, 0.7, 0.85]
+hpa_stable_seconds = [0, 300]
+bacc_pace_scale = [0.25, 0.5, 1.0, 2.0]
+bacc_window = [180, 720]
+
+[[scenarios]]
+name = "nominal"
+maximum = 16
+rate = 4
+actual_delay_seconds = 60
+
+[[scenarios]]
+name = "rate_limit"
+maximum = 16
+rate = 1
+actual_delay_seconds = 60
+
+[[scenarios]]
+name = "capacity_cap"
+maximum = 8
+rate = 4
+actual_delay_seconds = 60
+
+[[scenarios]]
+name = "delay_mismatch"
+maximum = 16
+rate = 4
+actual_delay_seconds = 180
+
+[[scenarios]]
+name = "joint_limits"
+maximum = 8
+rate = 1
+actual_delay_seconds = 180
+
+[[scenarios]]
+name = "joint_scale2"
+maximum = 8
+rate = 1
+actual_delay_seconds = 180
+demand_multiplier = 2.0
+
+[[scenarios]]
+name = "delay_outside_contract"
+maximum = 16
+rate = 4
+actual_delay_seconds = 300

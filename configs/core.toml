@@ -1,0 +1,18 @@
+# Core property checks only; no full-method benchmark configuration is implied.
+[calibration]
+alpha = 0.05
+gamma = 0.01
+window = 1000
+clip = [0.001, 0.999]
+
+[actuator]
+step_seconds = 60
+delay_seconds = 90
+capacity = 10.0
+minimum = 1
+maximum = 32
+max_change = 4
+stable_seconds = 300
+
+[diagnostic]
+forecasts = 2000

@@ -1,0 +1,133 @@
+[design]
+version = "v2-confirm-v1"
+stage = "CONFIRM_APPROVED"
+deadline = "2026-11-03T23:59:59+08:00"
+traces = ["huawei_private2023", "huawei_public2023", "azure2019"]
+fit_days = 3
+calibration_days = 2
+validation_days = 3
+exploration_apps_per_trace = 50
+confirmation_cap_per_trace = 80
+predictors = ["persistence"]
+primary_predictor = "persistence"
+predictor_seed = 0
+seeds = [17, 29, 43, 71, 101]
+workers = 8
+
+[execution]
+exploration_scope = "primary"
+confirmation_scope = "all_descriptive"
+engine = "reference_python"
+confirm_eta_sensitivity = true # Added after exploration; only eta=0.1 determines endpoints.
+known_delay_hpa = true # Descriptive reference; validation-only selection at each actual delay.
+
+[gates]
+design_tag = "v2-design-v1"
+confirm_tag = "v2-confirm-v1"
+design_human_review = "APPROVED" # User authorization 2026-10-21; F1-F3 closed before the design tag.
+confirm_human_review = "APPROVED" # Explicit user approval 2026-10-21; distinct from author verification.
+confirm_numeric_review = "APPROVED" # eta=0.1 approved; descriptive A/B/C cannot alter P1-P3.
+
+[io]
+exploration_data = "data/processed/gate2"
+confirmation_data = "data/processed/v2-lite-confirm"
+output_db = "work/v2-lite.sqlite"
+reuse_csv = "results/v2-lite-lock-reuse.csv"
+summary_csv = "results/v2-lite-summary.csv"
+
+[selection]
+prefix_days = 5
+nonzero_fraction = 0.01
+active_days = 2
+positive_fit_peak = true
+hash_prefix = "20261020-v2-confirm:"
+
+[plant]
+step_seconds = 60
+assumed_startup_seconds = 60
+contract_startup_seconds = 600
+minimum = 1
+maximum = 16
+rate = 4
+stable_seconds = 300
+capacity_fit_peak_divisor = 8
+
+[gate]
+budget = 0.05
+budget_tolerance = 0.001
+minimum_contract_apps_per_trace = 30
+
+[endpoints]
+compliance_tolerance = 0.01
+sensitivity_tolerances = [0.001, 0.005, 0.02]
+p1_improvement = 0.10
+p1_cost_guardrail = 1.25
+p2_median_cost_ratio = 0.95
+p2_minimum_compliance_change = -0.02
+p3_macro_compliance = 0.90
+p3_individual_wrapper_compliance = 0.85
+
+[search]
+trials_per_method = 30
+risk_levels = [0.01, 0.02, 0.03, 0.05, 0.07, 0.10]
+cdt_eta = [0.01, 0.05, 0.25, 0.5, 1.0] # Legacy enumeration adapter; no CDT baseline run.
+bacc_pace_scale = [0.25, 0.5, 1.0, 2.0, 4.0] # Full lite competitor only.
+hpa_utilization = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2]
+hpa_stable_seconds = [0, 120, 300]
+bacc_window = 720
+bacc_cal_window = [240, 480, 960, 1440, 2880]
+pac_window = [240, 480, 960, 1440, 2880]
+pac_confidence_failure = 0.05
+margin_min = 0.0
+margin_max = 8.0
+wrapper_eta = [0.02, 0.05, 0.1, 0.2, 0.5]
+
+[frozen_numeric]
+selected_eta = 0.1 # Approved using the old 150-app exploration; never reselected on confirmation.
+
+[descriptive]
+risk_distribution = true
+risk_distribution_pooling = "unweighted_vendor_app_case"
+known_delay_hpa = true
+eta_sensitivity = [0.02, 0.05, 0.1, 0.2, 0.5]
+nonprimary_cases = "report_all_contract_and_outside"
+added_after_exploration = "2026-10-21"
+
+[stress]
+primary = ["delay120", "delay180", "delay300", "delay600"]
+delay_seconds = [60, 120, 180, 300, 600]
+ramps = [1.5, 2.0]
+steps = [1.5, 2.0]
+flash_amplitudes = [3.0, 5.0]
+flash_minutes = [15, 60]
+rate_limit = 1
+capacity_cap = 8
+drift_start_fraction = 0.5
+
+[statistics]
+bootstrap_repetitions = 2000
+bootstrap_seed = 20261020
+source_slot_sensitivity_seed = 20261021
+maximum_bootstrap_attempts = 10000
+alpha = 0.05
+fixed_vendors = true
+fixed_sources = true
+maximum_unavailable_fraction = 0.05
+cost_tail_quantile = 0.90
+variants = ["primary", "ITT", "tolerance_0.001", "tolerance_0.005", "tolerance_0.02", "mixed_median", "Huawei_source_slots", "total_cost", "validation_budget_met"]
+
+[feasibility]
+benchmark_csv = "results/v2-lite-workload.csv"
+benchmark_ticks = 4096
+benchmark_repetitions = 3
+runtime_safety_factor = 3.0
+window_days = 14
+
+[schedule]
+timezone = "Asia/Shanghai"
+day_one = "2026-10-21"
+design_review = "2026-10-21" # Actual early authorization; originally planned for 23 October.
+numeric_review = "2026-10-25"
+results_review = "2026-10-28"
+manuscript_review = "2026-11-01"
+day_fourteen = "2026-11-03"

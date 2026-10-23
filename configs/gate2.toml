@@ -1,0 +1,75 @@
+[design]
+version = "gate2-protocol-v1"
+deadline = "2026-11-01T23:59:00+08:00"
+traces = ["huawei_private2023", "huawei_public2023", "azure2019"]
+apps_per_trace = 50
+fit_days = 3
+calibration_days = 2
+validation_days = 3
+primary_predictor = "lightgbm"
+predictors = ["lightgbm", "persistence"]
+seeds = [17, 29, 43, 71, 101]
+workers = 8
+
+[selection]
+prefix_days = 5
+nonzero_fraction = 0.01
+active_days = 2
+positive_fit_peak = true
+hash_prefix = "42:"
+
+[plant]
+step_seconds = 60
+assumed_startup_seconds = 60
+contract_startup_seconds = 600
+minimum = 1
+maximum = 16
+rate = 4
+stable_seconds = 300
+capacity_fit_peak_divisor = 8
+
+[gate]
+budget = 0.05
+budget_tolerance = 0.001
+matching_tolerance = 0.001
+a_hpa_improvement = 0.15
+b_bacc_median_ratio = 0.90
+b_oracle_hpa_ratio = 1.10
+b_oracle_hpa_success_fraction = 0.70
+minimum_contract_apps_per_trace = 30
+
+[search]
+trials_per_method = 30
+risk_levels = [0.01, 0.02, 0.03, 0.05, 0.07, 0.10]
+cdt_eta = [0.01, 0.05, 0.25, 0.5, 1.0]
+hpa_utilization = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2]
+hpa_stable_seconds = [0, 120, 300]
+bacc_pace_scale = [0.25, 0.5, 1.0, 2.0, 4.0]
+bacc_window = 720
+pac_window = [240, 480, 960, 1440, 2880]
+pac_confidence_failure = 0.05
+margin_min = 0.0
+margin_max = 8.0
+
+[forecast]
+rounds = 100
+num_leaves = 15
+bagging_fraction = 0.9
+feature_fraction = 0.9
+bagging_freq = 1
+threads = 1
+
+[stress]
+delay_seconds = [60, 120, 180, 300, 600]
+ramps = [1.5, 2.0]
+steps = [1.5, 2.0]
+flash_amplitudes = [3.0, 5.0]
+flash_minutes = [15, 60]
+rate_limit = 1
+capacity_cap = 8
+drift_start_fraction = 0.5
+
+[statistics]
+bootstrap_repetitions = 2000
+bootstrap_seed = 20261018
+alpha = 0.05

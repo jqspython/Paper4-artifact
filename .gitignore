@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.nbc
+*.nbi
+.env*
+*.key
+*.crt
+/work/*
+!/work/.gitkeep
+/data/raw/
+*.npz
+*.npy
+*.sqlite*
+*.jsonl
+/results/*
+!/results/v3-sys-fragment-ids.csv
