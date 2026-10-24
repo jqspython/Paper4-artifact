@@ -47,6 +47,8 @@ def run(args):
     plan_meta=json.loads(plan.with_suffix(".meta.json").read_text("utf-8"))
     check_identity(plan_meta,args.session,config)
     if args.session is None:
+        if plan_meta.get("capacity_rps") != config["calibration"]["capacity_rps"]:
+            raise ValueError("Formal plan uses a stale capacity calibration")
         if not args.slot_id: raise ValueError("Formal execution requires the reserved fixed slot")
         ledger=list(csv.DictReader((ROOT/"results/v3-sys-attempts.csv").open(encoding="utf-8")))
         related=[r for r in ledger if r["slot_id"]==args.slot_id]
@@ -114,6 +116,7 @@ def run(args):
         command=[str(WORK/"bin/replay"),"-schedule",str(plan),"-target","http://paper4-v3-sys-worker:30080/work",
             "-out",str(WORK/(args.label+"-requests.csv")),"-duration",str(duration),
             "-timeout-ms",str(config["calibration"]["timeout_ms"]),"-slo-ms",str(config["calibration"]["slo_ms"])]
+        if config["replay"].get("fresh_connections",False): command.append("-fresh-connections")
         stderr_file=(WORK/(args.label+"-sender-stderr.log")).open("w",encoding="utf-8")
         child=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=stderr_file,text=True,
             preexec_fn=lambda: os.sched_setaffinity(0,{0,2}))
@@ -140,7 +143,7 @@ def run(args):
                 arm_name={"hpa":"HPA-locked","wrapped-hpa":"HPA-wrapped","conservative-hpa":"HPA-conservative"}[args.arm]
                 meta=dict(type="meta",run_id=args.label,arm=arm_name,source=plan_meta["source"],app=plan_meta["app"],
                     delay=args.delay,repeat=args.repeat,session=args.session,schedule_sha256=fingerprint,
-                    c_rps=96,slo_ms=18.924,timeout_ms=189.2,ticks=plan_meta["ticks"],fault=args.fault,
+                    c_rps=config["calibration"]["capacity_rps"],slo_ms=18.924,timeout_ms=189.2,ticks=plan_meta["ticks"],fault=args.fault,
                     start_mono=event["start_mono_ns"]/1e9,finish_mono=None,request_csv=args.label+"-requests.csv",
                     schedule_csv=str(plan.resolve().relative_to(WORK.resolve())),initial_replicas=args.initial_replicas,
                     slot_id=args.slot_id,sender_binary_sha256=hashlib.sha256((WORK/"bin/replay").read_bytes()).hexdigest())
@@ -160,7 +163,7 @@ def run(args):
                     t=index-1
                     ready_now,inflight=runtime.state()
                     delay=60 if args.fault=="startup60" and 60<=index<120 else args.delay
-                    b=hpa_request(counts[t],96,utilization)
+                    b=hpa_request(counts[t],config["calibration"]["capacity_rps"],utilization)
                     record=controller.finish_tick(t,counts[t],ready_at_start,b,ready_now=ready_now,inflight=inflight,
                         emit=lambda request:runtime.issue(request,delay,t),runtime_cap=runtime.cap)
                     record.update(type="tick",boundary_mono=boundaries[-2],next_boundary_mono=actual_boundary,

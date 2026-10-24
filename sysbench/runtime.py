@@ -44,7 +44,7 @@ def pod(name, owner, delay):
     return {"apiVersion":"v1","kind":"Pod","metadata":{"name":name,
         "labels":{"app":"paper4-cpu-http","paper4-run":owner}},"spec":{
         "terminationGracePeriodSeconds":1,"restartPolicy":"Never","containers":[{
-            "name":"cpu-http","image":"paper4-v3-http:feasibility","imagePullPolicy":"Never",
+            "name":"cpu-http","image":"paper4-v3-http:poisson-v2","imagePullPolicy":"Never",
             "env":[{"name":"STARTUP_SLEEP","value":str(delay)}],"ports":[{"containerPort":8080}],
             "resources":{"requests":{"cpu":"250m","memory":"64Mi"},"limits":{"cpu":"250m","memory":"128Mi"}},
             "readinessProbe":{"httpGet":{"path":"/health","port":8080},"periodSeconds":1,

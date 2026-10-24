@@ -32,6 +32,8 @@ sysbench/Dockerfile,source,none
 sysbench/__init__.py,source,none
 sysbench/analyze.py,source,none
 sysbench/arrival.py,source,none
+sysbench/calibrate.py,source,none
+sysbench/component.py,source,none
 sysbench/control.py,source,none
 sysbench/crosscheck.js,source,none
 sysbench/execute.py,source,none
@@ -45,6 +47,7 @@ sysbench/matrix.py,source,none
 sysbench/prepare.py,source,none
 sysbench/replay.go,source,none
 sysbench/replay_test.go,source,none
+sysbench/report_capacity.py,source,none
 sysbench/report_gates.py,source,none
 sysbench/run.py,source,none
 sysbench/runtime.py,source,none
@@ -63,6 +66,7 @@ tests/test_v2_lite_analysis.py,source,none
 tests/test_v2_lite_confirmation_data.py,source,none
 tests/test_v3_analysis.py,source,none
 tests/test_v3_arrival.py,source,none
+tests/test_v3_calibration.py,source,none
 tests/test_v3_matrix.py,source,none
 tests/test_v3_runtime.py,source,none
 tests/test_v3_sys.py,source,none

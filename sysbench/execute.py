@@ -135,7 +135,9 @@ def verify_result(log,slot,plan,config):
         raise ValueError("Run/plan/original-content schedule hashes differ")
     if meta.get("sender_binary_sha256")!=config["replay"]["sender_binary_sha256"]:
         raise ValueError("Actual sender binary differs from the frozen tested binary")
-    result=analyze(log,expected_ticks=240)
+    if plan_meta.get("capacity_rps") != config["calibration"]["capacity_rps"]:
+        raise ValueError("Plan uses a different capacity calibration")
+    result=analyze(log,capacity_rps=config["calibration"]["capacity_rps"],expected_ticks=240)
     if (result.get("status")!="RUN_LOG_ANALYZED" or result.get("ticks")!=240 or
             result.get("schedule_hash_content_verification")!="VERIFIED" or
             result.get("latency",{}).get("status")!="REQUEST_CSV_RECOMPUTED"):

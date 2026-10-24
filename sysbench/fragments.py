@@ -3,6 +3,7 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 import tomllib
@@ -15,8 +16,8 @@ ROOT=Path(__file__).resolve().parents[1]
 def _plan_metadata(source, app, *, fault, capacity):
     if source not in {"huawei_private2023", "huawei_public2023", "azure2019"} or not app:
         raise ValueError("A fixed source-qualified identity is required")
-    if fault not in ("none", "demand3") or capacity != 96:
-        raise ValueError("Only the frozen 96-RPS mapping and demand3 arrival fault are supported")
+    if fault not in ("none", "demand3") or isinstance(capacity,bool) or not math.isfinite(capacity) or capacity <= 0:
+        raise ValueError("Positive calibrated capacity and declared arrival fault are required")
     digest=hashlib.sha256(f"v3-sys|20261022|{source}|{app}".encode()).digest()
     return dict(source=source,app=app,ticks=240,seed=int.from_bytes(digest[:8],"big"),fault=fault,
         mapping="fitting_prefix_peak_to_4_pods",start_rule="first_240_minutes_of_exploration_test",

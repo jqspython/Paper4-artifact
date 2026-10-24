@@ -99,3 +99,12 @@ or the full BACC system. Trace-related identifiers retain the cited source
 attribution; the software MIT license does not relicense third-party data.
 Third-party dependencies retain their respective licenses and are installed
 separately. See `SOURCE_MAP.csv` for the explicit release file inventory.
+
+## Poisson capacity correction
+
+The v1 value c=96 was measured with constant-rate arrivals and must not
+be used for formal Poisson comparisons. The configuration records the
+bounded recalibration status; a missing successful calibration blocks
+formal execution. D3 SLO/deadline and D1-D10 semantics are unchanged.
+Calibration and a constant-load actuator component check are engineering
+checks, separate from both the six earlier shakedowns and study endpoints.

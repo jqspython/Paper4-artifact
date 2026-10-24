@@ -291,7 +291,8 @@ def verified_artifact(root, path, started, inside, total):
             raise ValueError("Completed artifact differs from reserved slot: " + key)
     if meta.get("session") is not None:
         raise ValueError("A shakedown artifact cannot be a formal eligible attempt")
-    result = analyze(path)
+    config = tomllib.loads((Path(root)/"configs/v3-sys.toml").read_text("utf-8"))
+    result = analyze(path,capacity_rps=config["calibration"]["capacity_rps"])
     if result["status"] != "RUN_LOG_ANALYZED" or result["schedule_hash_content_verification"] != "VERIFIED" or result["latency"]["status"] != "REQUEST_CSV_RECOMPUTED":
         raise ValueError("Independent real-log/request/plan evidence incomplete")
     if (result["loop_in_range_count"], result["loop_interval_count"]) != (inside, total):

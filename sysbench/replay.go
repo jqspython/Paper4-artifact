@@ -32,6 +32,7 @@ type record struct {
 	WriteCallbacks        int64
 	Code                  int
 	Error                 string
+	Pod                   string
 }
 
 // The calibrated Python HTTP/1.1 server writes headers/body separately.
@@ -143,6 +144,7 @@ func main() {
 	duration := flag.Float64("duration", 0, "measurement seconds")
 	timeout := flag.Float64("timeout-ms", 189.2, "planned-time deadline, milliseconds")
 	slo := flag.Float64("slo-ms", 18.924, "window p95 limit")
+	fresh := flag.Bool("fresh-connections", false, "disable reuse uniformly if the backend balance check fails")
 	flag.Parse()
 	if *duration <= 0 || *timeout <= 0 || *target == "" || *out == "" || *duration/5 != math.Trunc(*duration/5) {
 		panic("invalid replay arguments")
@@ -154,6 +156,7 @@ func main() {
 	}
 	dialer := &net.Dialer{Timeout: time.Second, KeepAlive: 30 * time.Second}
 	tr := &http.Transport{MaxIdleConns: 512, MaxIdleConnsPerHost: 512, DisableCompression: true,
+		DisableKeepAlives: *fresh,
 		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
 			conn, err := dialer.DialContext(ctx, network, address)
 			if err != nil {
@@ -223,6 +226,7 @@ func main() {
 			resp, e := client.Do(req)
 			if e == nil {
 				rec.Code = resp.StatusCode
+				rec.Pod = resp.Header.Get("X-Paper4-Pod")
 				_, e = io.Copy(io.Discard, resp.Body)
 				closeErr := resp.Body.Close()
 				if e == nil {
@@ -256,7 +260,7 @@ func main() {
 		panic(err)
 	}
 	w := csv.NewWriter(f)
-	w.Write([]string{"request_id", "offset_ns", "written_ns", "completed_ns", "http_status", "error", "write_callbacks"})
+	w.Write([]string{"request_id", "offset_ns", "written_ns", "completed_ns", "http_status", "error", "write_callbacks", "pod"})
 	for i := range records {
 		r := &records[i]
 		writtenAt := atomic.LoadInt64(&r.Written)
@@ -276,7 +280,7 @@ func main() {
 		}
 		latency = append(latency, v)
 		window[r.Offset/int64(5*time.Second)] = append(window[r.Offset/int64(5*time.Second)], v)
-		w.Write([]string{strconv.Itoa(i), strconv.FormatInt(r.Offset, 10), strconv.FormatInt(writtenAt, 10), strconv.FormatInt(r.Done, 10), strconv.Itoa(r.Code), r.Error, strconv.FormatInt(callbacks, 10)})
+		w.Write([]string{strconv.Itoa(i), strconv.FormatInt(r.Offset, 10), strconv.FormatInt(writtenAt, 10), strconv.FormatInt(r.Done, 10), strconv.Itoa(r.Code), r.Error, strconv.FormatInt(callbacks, 10), r.Pod})
 	}
 	w.Flush()
 	if err = w.Error(); err != nil {

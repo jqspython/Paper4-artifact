@@ -40,10 +40,12 @@ class MatrixLedgerTests(unittest.TestCase):
         self.allow_artifact.start()
         self.addCleanup(self.allow_artifact.stop)
 
-    def write_config(self, *, status="FROZEN", high=30):
+    def write_config(self, *, status="FROZEN", high=30, capacity=96):
         # Artificial metadata is not an approval or frozen real experiment.
         text = f'''status = "{status}"
 freeze_tag = "test-freeze"
+[calibration]
+capacity_rps = {capacity}
 [selection]
 ids = "results/ids.csv"
 seed = 20261022
@@ -242,6 +244,15 @@ fragments = ["huawei_public2023/1455", "huawei_private2023/149"]
         event = self.close(start)[0]
         self.assertEqual(event["event"], "INVALID")
         self.assertIn("source", event["reason"])
+
+    def test_internally_consistent_old_capacity_log_is_not_eligible(self):
+        self.allow_artifact.stop()
+        self.write_config(capacity=60)
+        start = self.reserve()
+        self.materialize(start)  # Complete synthetic log was constructed with c=96.
+        event = self.close(start)[0]
+        self.assertEqual(event["event"], "INVALID")
+        self.assertIn("capacity", event["reason"])
 
     def materialize(self, start):
         from tests.test_v3_analysis import fixture

@@ -369,7 +369,9 @@ def analyze_run(records, *, expected_ticks=240, request_rows=None, schedule_byte
     digest = meta["schedule_sha256"]
     if not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
         raise ValueError("Explicit schedule SHA256 required")
-    for key, expected in (("c_rps", 96), ("slo_ms", 18.924), ("timeout_ms", 189.2)):
+    if number(meta["c_rps"], "c_rps") <= 0:
+        raise ValueError("Positive measured capacity required; formal caller binds frozen value")
+    for key, expected in (("slo_ms", 18.924), ("timeout_ms", 189.2)):
         if number(meta[key], key) != expected:
             raise ValueError("Recorded operational calibration differs from D3/config: " + key)
     if number(meta["finish_mono"], "finish_mono") < number(meta["start_mono"], "start_mono"):

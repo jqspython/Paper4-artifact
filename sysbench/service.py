@@ -4,6 +4,8 @@ import os
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+POD_NAME = os.environ.get("HOSTNAME", "unknown")
+
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -19,6 +21,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Content-Type", "text/plain")
+        self.send_header("X-Paper4-Pod", POD_NAME)
         self.end_headers()
         self.wfile.write(payload)
 
