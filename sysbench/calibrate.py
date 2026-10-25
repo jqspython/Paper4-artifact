@@ -27,6 +27,7 @@ DECISION = WORK / "capacity-v2-decision.json"
 IMAGE = "python:3.11-slim-bookworm@sha256:0a310eeecf4e1f5a0743f9a6520c90c88d089c903ca5fd283f501e3a805f5f89"
 GRID = (40, 50, 60, 70, 80)
 ROUND = 1
+REFRESH_CHECK = False
 FIELDS = ("number", "label", "purpose", "pods", "per_pod_rps", "seconds", "seed", "fresh_connections",
           "started_utc", "status", "slo_bad_windows", "slo_windows", "prefix_failed", "failed", "backend_max_over_mean",
           "missing_backend", "late_p99_ms", "sender_cpu_fraction", "slo_pass", "fidelity_pass", "note")
@@ -43,7 +44,7 @@ def round_two():
         "transport_scheme","probe","config_sha256")
 
 
-def qualified_transport(config, root=ROOT):
+def qualified_transport(config, root=ROOT, *, allow_refresh_pending=False):
     """Bind later use to the sender actually measured, not merely to today's config."""
     root=Path(root); work=root/'work/v3-sys'
     snapshot=(work/'capacity-r2-config.toml').read_bytes()
@@ -57,18 +58,20 @@ def qualified_transport(config, root=ROOT):
         if config[section]!=original[section]: raise ValueError('Measured configuration changed: '+section)
     for key in ('slo_ms','timeout_ms'):
         if config['calibration'][key]!=original['calibration'][key]: raise ValueError('Measured SLO changed')
-    for key in ('transport_scheme','fresh_connections','sender_source_sha256','sender_binary_sha256'):
+    refresh=config['replay'].get('connection_refresh')=='ready_set_change_close_idle'
+    for key in ('transport_scheme','fresh_connections'):
         if config['replay'][key]!=original['replay'][key]: raise ValueError('Qualified transport identity changed: '+key)
     if config['replay']['transport_scheme']!='T1' or config['replay']['fresh_connections']:
         raise ValueError('This calibration provenance supports T1 only')
-    for key,path,text in [('sender_source_sha256',root/'sysbench/replay.go',True),
-                          ('sender_binary_sha256',work/'bin/replay',False)]:
+    for key,path,text in [('sender_source_sha256',work/'replay-static-r2.go' if refresh else root/'sysbench/replay.go',True),
+                          ('sender_binary_sha256',work/'bin/replay-r2' if refresh else work/'bin/replay',False)]:
+        if not refresh and config['replay'][key]!=original['replay'][key]: raise ValueError('Qualified transport identity changed: '+key)
         raw=path.read_text('utf-8').encode() if text else path.read_bytes()
         if hashlib.sha256(raw).hexdigest()!=original['replay'][key]: raise ValueError('Measured sender file changed: '+key)
     with (root/'results/v3-sys-capacity-r2.csv').open(encoding='utf-8') as stream: rows=list(csv.DictReader(stream))
-    if len(rows)!=decision['short_runs_used'] or not 11<=len(rows)<=12:
+    if decision['short_runs_used']!=11 or not 11<=len(rows)<=12:
         raise ValueError('Qualified calibration ledger is incomplete')
-    for row in rows:
+    for row in rows[:11]:
         if row['status']!='MEASURED' or row['config_sha256']!=snapshot_id or row['transport_scheme']!='T1':
             raise ValueError('Calibration registration differs from retained configuration')
         events=[json.loads(s) for s in (work/(row['label']+'-events.jsonl')).read_text('utf-8').splitlines()]
@@ -79,8 +82,49 @@ def qualified_transport(config, root=ROOT):
         if any(str(driver['parameters'][k])!=str(row[k]) for k in
                ('label','pods','per_pod_rps','seconds','seed','transport_scheme','config_sha256')):
             raise ValueError('Driver receipt differs from prior registration')
-    return dict(config_sha256=snapshot_id,source_sha256=original['replay']['sender_source_sha256'],
-                binary_sha256=original['replay']['sender_binary_sha256'],capacity_rps=selected,transport_scheme='T1')
+    identity=original['replay']; current_snapshot=snapshot_id
+    if refresh:
+        raw=(work/'capacity-r2-refresh-config.toml').read_bytes()
+        revised=tomllib.loads(raw.decode('utf-8')); current_snapshot=hashlib.sha256(raw).hexdigest()
+        for section in ('platform','controller','metrics'):
+            if revised[section]!=original[section]: raise ValueError('Lifecycle repair changed measurement semantics')
+        if revised['calibration']['capacity_rps']!=selected or revised['calibration']['capacity_count_per_tick']!=5*selected:
+            raise ValueError('Lifecycle repair cannot reselect capacity')
+        for key in ('slo_ms','timeout_ms'):
+            if revised['calibration'][key]!=original['calibration'][key]: raise ValueError('Lifecycle repair changed SLO')
+        for key in ('transport_scheme','fresh_connections','connection_refresh','sender_source_sha256','sender_binary_sha256'):
+            if config['replay'][key]!=revised['replay'][key]: raise ValueError('Lifecycle repair identity changed')
+        for key,path,text in [('sender_source_sha256',root/'sysbench/replay.go',True),('sender_binary_sha256',work/'bin/replay',False)]:
+            raw=path.read_text('utf-8').encode() if text else path.read_bytes()
+            if hashlib.sha256(raw).hexdigest()!=revised['replay'][key]: raise ValueError('Lifecycle repair file changed')
+        if not allow_refresh_pending:
+            extension=json.loads((work/'capacity-r2-refresh-decision.json').read_text('utf-8'))
+            if len(rows)!=12 or extension.get('status')!='PASS' or extension.get('selected_capacity')!=selected or extension.get('short_runs_used')!=12:
+                raise ValueError('Repaired sender lacks its final bounded fidelity check')
+            row=rows[-1]
+            if row['status']!='MEASURED' or row['config_sha256']!=current_snapshot or row['label']!='cal-r2-12' or row['transport_scheme']!='T1' or row['slo_pass']!='True' or row['fidelity_pass']!='True':
+                raise ValueError('Repaired sender registration differs')
+            if (int(row['pods']),int(row['per_pod_rps']),int(row['seconds']),int(row['seed']))!=(8,selected,300,2026102599):
+                raise ValueError('Repaired sender check changed capacity or plan')
+            events=[json.loads(s) for s in (work/'cal-r2-12-events.jsonl').read_text('utf-8').splitlines()]
+            driver,=[e for e in events if e['type']=='calibration_driver']
+            started,=[e for e in events if e['type']=='start']
+            complete,=[e for e in events if e['type']=='complete']
+            if driver['sender_binary_sha256']!=revised['replay']['sender_binary_sha256'] or not started.get('refresh_on_stdin'):
+                raise ValueError('Repaired sender was not actually checked')
+            if driver['parameters']['config_sha256']!=current_snapshot:
+                raise ValueError('Repaired sender driver/configuration mismatch')
+            if any(str(driver['parameters'][k])!=str(row[k]) for k in
+                   ('label','pods','per_pod_rps','seconds','seed','transport_scheme','config_sha256')):
+                raise ValueError('Repaired sender actual parameters differ')
+            digest=hashlib.sha256((work/'cal-r2-12-plan.csv').read_bytes()).hexdigest()
+            if any(e['schedule_sha256']!=digest for e in (driver,started,complete)):
+                raise ValueError('Repaired sender completed plan identity differs')
+            if complete['failed'] or complete['missing_write'] or complete['written']!=driver['planned_requests'] or complete['planned']!=driver['planned_requests']:
+                raise ValueError('Repaired sender completion is incomplete or failed')
+        identity=revised['replay']
+    return dict(config_sha256=current_snapshot,source_sha256=identity['sender_source_sha256'],
+                binary_sha256=identity['sender_binary_sha256'],capacity_rps=selected,transport_scheme='T1')
 
 
 def ledger():
@@ -96,8 +140,12 @@ def write_rows(rows):
 
 
 def register(purpose, pods, rate, seconds, seed, fresh):
-    if DECISION.exists(): raise RuntimeError("Calibration decision is terminal; no extra runs after it")
     rows = ledger()
+    if DECISION.exists():
+        original=json.loads(DECISION.read_text('utf-8'))
+        allowed=(REFRESH_CHECK and ROUND==2 and len(rows)==11 and original.get('status')=='PASS' and
+                 (purpose,pods,rate,seconds,seed,fresh)==('eight_pod_fidelity',8,original['selected_capacity'],300,2026102599,False))
+        if not allowed: raise RuntimeError("Calibration decision is terminal; no extra runs after it")
     if len(rows) >= 12 or any(r["status"] == "RUNNING" for r in rows):
         raise RuntimeError("Calibration budget exhausted or unfinished attempt; never reset the ledger")
     n = len(rows)+1
@@ -191,9 +239,11 @@ def worker(row):
                "-duration", str(seconds), "-timeout-ms", "189.2", "-slo-ms", "18.924"]
         if fresh: cmd.append("-fresh-connections")
         if row.get("transport_scheme") == "T1": cmd += ["-independent-transports","256"]
+        if tomllib.loads((ROOT/'configs/v3-sys.toml').read_text('utf-8'))['replay'].get('connection_refresh')=='ready_set_change_close_idle':
+            cmd += ['-refresh-on-stdin']
         output = (WORK/(label+"-events.jsonl")).open("w", encoding="utf-8")
         errors = (WORK/(label+"-sender-stderr.log")).open("w", encoding="utf-8")
-        child = subprocess.Popen(cmd, stdout=output, stderr=errors,
+        child = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=output, stderr=errors,
                                  preexec_fn=lambda: os.sched_setaffinity(0, {0, 2}))
         until = time.monotonic()+seconds+60
         while child.poll() is None:
@@ -365,6 +415,32 @@ def run_round_two():
     print("CALIBRATION_DECISION "+json.dumps(decision),flush=True)
 
 
+def run_refresh_check():
+    """One final same-c check of a T1 lifecycle repair; never a new selection round."""
+    global REFRESH_CHECK
+    target=WORK/'capacity-r2-refresh-decision.json'
+    if ROUND!=2 or target.exists() or len(ledger())!=11 or (ROOT/'results/v3-sys-attempts.csv').exists():
+        raise RuntimeError('Only the unused twelfth slot is available; no formal runs or resets')
+    config=tomllib.loads((ROOT/'configs/v3-sys.toml').read_text('utf-8'))
+    if config['replay'].get('connection_refresh')!='ready_set_change_close_idle':
+        raise ValueError('Only the reviewed T1 lifecycle repair is allowed')
+    identity=qualified_transport(config,allow_refresh_pending=True)
+    decision=dict(status='FAILED',selected_capacity=identity['capacity_rps'],transport_scheme='T1',
+                  capacity_reselected=False,original_decision_preserved=True)
+    REFRESH_CHECK=True
+    try:
+        score=point('eight_pod_fidelity',identity['capacity_rps'],n=8,seconds=300,seed=2026102599)
+        decision['status']='PASS' if score['slo_pass'] and score['fidelity_pass'] else 'FAILED'
+    except BaseException as error:
+        decision['error']=type(error).__name__+': '+str(error)
+    finally:
+        REFRESH_CHECK=False
+    decision.update(short_runs_used=len(ledger()),short_run_limit=12,first_round_runs=5,
+                    next_stage='REPAIRED_COMPONENT_REGRESSION' if decision['status']=='PASS' else 'FINAL_FALLBACK_A')
+    with target.open('x',encoding='utf-8') as out: out.write(json.dumps(decision,indent=2)+'\n')
+    print('LIFECYCLE_FIDELITY_DECISION '+json.dumps(decision),flush=True)
+
+
 def finalize_stopped():
     """Close a failed five-point screen after an interrupted static run; no IO to the cluster."""
     rows=ledger()
@@ -395,11 +471,13 @@ if __name__ == "__main__":
     p.add_argument("--run-all", action="store_true")
     p.add_argument("--finalize-stopped",action="store_true")
     p.add_argument("--round2",action="store_true")
+    p.add_argument("--refresh-check",action="store_true")
     args = p.parse_args()
     if args.round2: round_two()
     if args.worker:
         if args.number is None: p.error("Worker needs a registered number")
         worker(ledger()[args.number-1])
+    elif args.refresh_check: run_refresh_check()
     elif args.run_all: run_round_two() if args.round2 else run_all()
     elif args.finalize_stopped: finalize_stopped()
     else: p.error("Choose --run-all or a registered Linux worker")

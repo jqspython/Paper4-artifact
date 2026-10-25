@@ -351,7 +351,7 @@ def monitor_evidence(truths, flags, boundaries):
 
 def verify_t1(records, meta, request_rows):
     """Transport evidence is checked separately from scientific outcome arithmetic."""
-    extras=[r for r in records if r['type'] in {'connection','transport_ready'}]
+    extras=[r for r in records if r['type'] in {'connection','transport_ready','transport_refresh','transport_state'}]
     if meta.get('transport_scheme')!='T1':
         if extras: raise ValueError("Transport evidence has no matching T1 metadata")
         return
@@ -392,12 +392,41 @@ def verify_t1(records, meta, request_rows):
             elif (not any(s==slot and t<=deadline for (s,_),t in known.items()) or
                   known[key]>meta['start_mono']*1e9+int(r['completed_ns'])):
                 raise ValueError("T1 retry lacks earlier write/last-connection evidence")
+    refreshes=[r for r in extras if r['type']=='transport_refresh']
+    states=[r for r in extras if r['type']=='transport_state']
+    enabled=meta.get('connection_refresh')=='ready_set_change_close_idle'
+    if (refreshes or states) and not enabled:
+        raise ValueError('Unexpected T1 lifetime refresh')
+    ready_at={r['pod']:r['at'] for r in records if r['type']=='pod_event' and r['event_type']=='ready'}
+    deleted={r['pod']:r['at'] for r in records if r['type']=='pod_event' and r['event_type']=='delete'}
+    previous_set=sorted(p for p,t in ready_at.items() if t<=meta['start_mono']<deleted.get(p,math.inf))
+    if enabled:
+        ticks=sum(r['type']=='tick' for r in records)
+        if [r['tick'] for r in states]!=list(range(ticks)):
+            raise ValueError('Missing T1 Ready state at a control boundary')
+        expected={}
+        for state in states:
+            tick=count(state['tick'],'Ready state tick')
+            when=number(state['checked_mono_ns'],'Ready check clock')/1e9
+            actual=sorted(p for p,t in ready_at.items() if t<=when<deleted.get(p,math.inf))
+            if not actual or when<meta['start_mono']+tick*5 or actual!=list(state['ready_pods']):
+                raise ValueError('T1 state differs from Ready lifecycle')
+            if actual!=previous_set: expected[tick]=state
+            previous_set=actual
+        if len(refreshes)!=len(expected) or {r['tick'] for r in refreshes}!=set(expected):
+            raise ValueError('Missing/extra T1 refresh for changed Ready lifecycle')
+        for r in refreshes:
+            state=expected[r['tick']]
+            if (r['requested_mono_ns']!=state['checked_mono_ns'] or r['ready_pods']!=list(state['ready_pods']) or
+                    number(r['observed_mono_ns'],'refresh receipt clock')<r['requested_mono_ns']):
+                raise ValueError('T1 refresh receipt differs from Ready lifecycle')
+            if r.get('policy')!='ready_set_change_close_idle': raise ValueError('T1 refresh policy changed')
 
 
 def analyze_run(records, *, expected_ticks=240, request_rows=None, schedule_bytes=None):
     for record in records:
         finite_record(record)
-        if record.get("type") not in {"meta", "tick", "pod_event", "complete", "connection", "transport_ready"}:
+        if record.get("type") not in {"meta", "tick", "pod_event", "complete", "connection", "transport_ready", "transport_refresh", "transport_state"}:
             raise ValueError("Unknown real-log record type")
     metas = [r for r in records if r["type"] == "meta"]
     completes = [r for r in records if r["type"] == "complete"]

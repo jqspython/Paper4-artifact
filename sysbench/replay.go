@@ -196,6 +196,41 @@ func independentClients(target string, count int, emit func(any)) ([]*http.Clien
 	return clients, closeAll, nil
 }
 
+// Only connection lifetime changes. Request IDs, destinations and deadlines do not.
+func refreshIdle(input io.Reader, closeAll func(), emit func(any), ticks int) error {
+	decoder := json.NewDecoder(input)
+	decoder.DisallowUnknownFields()
+	previous := -1
+	for {
+		var command struct {
+			Tick      int      `json:"tick"`
+			ReadyPods []string `json:"ready_pods"`
+			Requested int64    `json:"requested_mono_ns"`
+		}
+		if err := decoder.Decode(&command); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+		if command.Tick <= previous || command.Tick < 0 || command.Tick >= ticks ||
+			len(command.ReadyPods) == 0 || len(command.ReadyPods) > 8 ||
+			!sort.StringsAreSorted(command.ReadyPods) || command.Requested <= 0 || command.Requested > monoNS() {
+			return errors.New("invalid T1 Ready-set refresh command")
+		}
+		for i, name := range command.ReadyPods {
+			if name == "" || i > 0 && name == command.ReadyPods[i-1] {
+				return errors.New("duplicate/empty Ready Pod")
+			}
+		}
+		closeAll()
+		emit(map[string]any{"type": "transport_refresh", "tick": command.Tick,
+			"ready_pods": command.ReadyPods, "requested_mono_ns": command.Requested,
+			"observed_mono_ns": monoNS(), "policy": "ready_set_change_close_idle"})
+		previous = command.Tick
+	}
+}
+
 func main() {
 	if runtime.GOOS != "linux" {
 		panic("CLOCK_MONOTONIC replay must run in Linux")
@@ -208,9 +243,13 @@ func main() {
 	slo := flag.Float64("slo-ms", 18.924, "window p95 limit")
 	fresh := flag.Bool("fresh-connections", false, "disable reuse uniformly if the backend balance check fails")
 	independent := flag.Int("independent-transports", 0, "T1: exactly 256 independent single-connection transports")
+	refresh := flag.Bool("refresh-on-stdin", false, "T1: close idle connections when controller reports a changed Ready set")
 	flag.Parse()
 	if (*independent != 0 && *independent != 256) || (*independent != 0 && *fresh) {
 		panic("T1 requires 256 transports and connection reuse")
+	}
+	if *refresh && *independent != 256 {
+		panic("Ready refresh requires T1")
 	}
 	if *duration <= 0 || *timeout <= 0 || *target == "" || *out == "" || *duration/5 != math.Trunc(*duration/5) {
 		panic("invalid replay arguments")
@@ -251,10 +290,18 @@ func main() {
 			panic(err)
 		}
 		defer closeAll()
+		if *refresh {
+			go func() {
+				if e := refreshIdle(os.Stdin, closeAll, emit, int(*duration/5)); e != nil {
+					emit(map[string]any{"type": "transport_refresh_error", "error": e.Error()})
+					panic(e)
+				}
+			}()
+		}
 	}
 	// Python's Linux time.monotonic_ns and this CLOCK_MONOTONIC share a domain.
 	origin := monoNS() + int64(2*time.Second)
-	emit(map[string]any{"type": "start", "start_mono_ns": origin, "schedule_sha256": hash, "planned_requests": len(records), "duration_seconds": *duration, "clock": "Linux CLOCK_MONOTONIC", "write_timestamp": "httptrace.WroteRequest"})
+	emit(map[string]any{"type": "start", "start_mono_ns": origin, "schedule_sha256": hash, "planned_requests": len(records), "duration_seconds": *duration, "clock": "Linux CLOCK_MONOTONIC", "write_timestamp": "httptrace.WroteRequest", "refresh_on_stdin": *refresh})
 	var boundaries sync.WaitGroup
 	boundaries.Add(1)
 	go func() {

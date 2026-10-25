@@ -16,7 +16,8 @@ from sysbench.control import ContractMonitor, TickController
 from sysbench.runtime import Kube, PodRuntime
 from sysbench.gates import plan
 from sysbench.calibrate import ROOT, WORK, IMAGE
-from sysbench.analyze import request_windows
+from sysbench.analyze import request_windows, verify_t1
+from sysbench.run import ready_ids, refresh_t1
 
 LEDGER = ROOT/"results/v3-sys-component.csv"
 LABEL = "component-v2-20261024"
@@ -99,9 +100,12 @@ def worker():
             if time.monotonic()>limit: raise TimeoutError("Initial component Pod")
             time.sleep(.1)
         stderr=(WORK/(LABEL+"-stderr.log")).open("w",encoding="utf-8")
+        refresh='refresh' in LABEL
+        previous_ready=ready_ids(runtime)
         child=subprocess.Popen([str(WORK/"bin/replay"),"-schedule",str(schedule),"-target",
             "http://paper4-v3-sys-worker:30080/work","-out",str(WORK/(LABEL+"-requests.csv")),
-            "-duration","300"]+(["-independent-transports","256"] if "r2" in LABEL else []),stdout=subprocess.PIPE,stderr=stderr,text=True,
+            "-duration","300"]+(["-independent-transports","256"] if "r2" in LABEL else [])+
+            (['-refresh-on-stdin'] if refresh else []),stdin=subprocess.PIPE if refresh else None,stdout=subprocess.PIPE,stderr=stderr,text=True,
             preexec_fn=lambda:os.sched_setaffinity(0,{0,2}))
         messages=queue.Queue()
         def receive():
@@ -129,8 +133,16 @@ def worker():
                     ticks.append(row)
                     if row["error"]: raise RuntimeError(row["error"])
                 n_start=ready
+                if refresh and i<60: previous_ready=refresh_t1(child,runtime,previous_ready,i,output.append)
         if child.wait(timeout=3) or len(boundary)!=61: raise RuntimeError("Incomplete component sender")
         completed,=[e for e in output if e["type"]=="complete"]
+        if refresh:
+            started,=[e for e in output if e['type']=='start']
+            with (WORK/(LABEL+'-requests.csv')).open(encoding='utf-8') as stream: actual_requests=list(csv.DictReader(stream))
+            evidence=[*output,*[dict(r,type='tick') for r in ticks],
+                      *[dict(r,type='pod_event',event_type=r['type']) for r in runtime.events]]
+            verify_t1(evidence,dict(transport_scheme='T1',connection_refresh='ready_set_change_close_idle',
+                                   start_mono=started['start_mono_ns']/1e9),actual_requests)
         result=check(ticks,runtime.events,monitor.flags,verify_requests(completed))
         result.update(http_failed=completed["failed"],schedule_sha256=fingerprint,formal_endpoint=False,
                       load="constant_1_RPS",proposal="scripted_5_at_t0_and_t4_to11_else1",
@@ -138,6 +150,7 @@ def worker():
         if "r2" in LABEL:
             result.update(transport_scheme="T1",sender_binary_sha256=hashlib.sha256((WORK/"bin/replay").read_bytes()).hexdigest(),
                           config_sha256=hashlib.sha256((ROOT/"configs/v3-sys.toml").read_bytes()).hexdigest())
+            result['connection_refresh']='ready_set_change_close_idle' if refresh else 'none'
         (WORK/(LABEL+"-result.json")).write_text(json.dumps(result,indent=2)+"\n",encoding="utf-8")
         print(json.dumps(result),flush=True)
     except BaseException as error:
@@ -179,7 +192,8 @@ def run():
         process=subprocess.run(["docker","run","--rm","--name","paper4-driver-"+LABEL,"--network","kind",
             "--label","paper4-v3-run="+LABEL,"--label","paper4-v3-slot=component-"+LABEL,
             "--cpuset-cpus","0,2,4-15","--mount",f"type=bind,source={ROOT},target=/src","--workdir","/src",
-            "--entrypoint","python",IMAGE,"-B","-m","sysbench.component","--worker"]+(["--round2"] if "r2" in LABEL else []),
+            "--entrypoint","python",IMAGE,"-B","-m","sysbench.component","--worker"]+(["--round2"] if "r2" in LABEL else [])+
+            (['--refresh-regression'] if 'refresh' in LABEL else []),
             capture_output=True,text=True,encoding="utf-8",timeout=410)
         (WORK/(LABEL+"-host.log")).write_text(process.stdout+"\n"+process.stderr,encoding="utf-8")
         if process.returncode: raise RuntimeError("Component infrastructure failure; evidence retained")
@@ -226,8 +240,12 @@ if __name__ == "__main__":
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--worker",action="store_true"); parser.add_argument("--recheck",action="store_true")
     parser.add_argument("--round2",action="store_true")
+    parser.add_argument("--refresh-regression",action="store_true")
     args=parser.parse_args()
-    if args.round2:
+    if args.refresh_regression:
+        LEDGER=ROOT/'results/v3-sys-component-r2-refresh.csv'
+        LABEL='component-r2-refresh-20261025'
+    elif args.round2:
         LEDGER=ROOT/"results/v3-sys-component-r2.csv"
         LABEL="component-r2-20261025"
     recheck() if args.recheck else worker() if args.worker else run()

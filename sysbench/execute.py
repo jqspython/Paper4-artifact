@@ -140,6 +140,8 @@ def verify_result(log,slot,plan,config):
         raise ValueError("Actual sender binary differs from the frozen tested binary")
     if meta.get('transport_scheme','legacy')!=config['replay'].get('transport_scheme','legacy'):
         raise ValueError("Actual transport differs from the calibrated frozen scheme")
+    if meta.get('connection_refresh','none')!=config['replay'].get('connection_refresh','none'):
+        raise ValueError('Actual T1 lifetime policy differs from tested policy')
     if plan_meta.get("capacity_rps") != config["calibration"]["capacity_rps"]:
         raise ValueError("Plan uses a different capacity calibration")
     result=analyze(log,capacity_rps=config["calibration"]["capacity_rps"],expected_ticks=240)

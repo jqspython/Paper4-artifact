@@ -1,9 +1,13 @@
 """Changed Kubernetes adapter paths with a fake API; no containers or traffic."""
 import unittest
+import io
+import json
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from sysbench.control import ContractMonitor
 from sysbench.runtime import PodRuntime, cost_between, pod
+from sysbench.run import refresh_t1, ready_ids
 
 
 class API:
@@ -22,6 +26,19 @@ class API:
 
 
 class RuntimeProperties(unittest.TestCase):
+    def test_t1_refresh_only_on_observed_ready_membership_change(self):
+        runtime=SimpleNamespace(items={'a':dict(ready=1,deleted=None),'b':dict(ready=None,deleted=None)})
+        child=SimpleNamespace(stdin=io.StringIO())
+        previous=ready_ids(runtime)
+        self.assertEqual(refresh_t1(child,runtime,previous,1),previous)
+        self.assertEqual(child.stdin.getvalue(),'')
+        runtime.items['b']['ready']=2
+        previous=refresh_t1(child,runtime,previous,2)
+        runtime.items['a']['deleted']=3
+        refresh_t1(child,runtime,previous,3)
+        commands=[json.loads(s) for s in child.stdin.getvalue().splitlines()]
+        self.assertEqual([(r['tick'],r['ready_pods']) for r in commands],[(2,['a','b']),(3,['b'])])
+
     def test_round_two_probe_keeps_period_and_initial_delay(self):
         probe=pod("test","test",5)["spec"]["containers"][0]["readinessProbe"]
         self.assertEqual((probe["timeoutSeconds"],probe["failureThreshold"],probe["periodSeconds"],

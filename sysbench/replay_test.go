@@ -1,12 +1,14 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -95,5 +97,40 @@ func TestIndependentTransportsPreconnectReuseAndRedial(t *testing.T) {
 	}
 	if dials != 257 || redials != 1 || !ready {
 		t.Fatal("missing preconnect/redial evidence", dials, redials, ready)
+	}
+}
+
+func TestReadyRefreshRetainsSlotClientsAndForcesNextDial(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) }))
+	defer server.Close()
+	dials := 0
+	clients, closeAll, err := independentClients(server.URL, 256, func(v any) {
+		if v.(map[string]any)["type"] == "connection" {
+			dials++
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAll()
+	before := clients[0]
+	receipts := 0
+	input := fmt.Sprintf("{\"tick\":1,\"ready_pods\":[\"a\",\"b\"],\"requested_mono_ns\":%d}\n", monoNS())
+	if err = refreshIdle(strings.NewReader(input), closeAll, func(any) { receipts++ }, 60); err != nil {
+		t.Fatal(err)
+	}
+	for i := range clients {
+		response, e := clients[i].Get(server.URL)
+		if e != nil {
+			t.Fatal(e)
+		}
+		io.Copy(io.Discard, response.Body)
+		response.Body.Close()
+	}
+	if before != clients[0] || receipts != 1 || dials != 512 {
+		t.Fatal("changed clients or missing redials", receipts, dials)
+	}
+	if err = refreshIdle(strings.NewReader(input+input), func() {}, func(any) {}, 60); err == nil {
+		t.Fatal("accepted duplicate tick")
 	}
 }

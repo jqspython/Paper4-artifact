@@ -67,6 +67,18 @@ class RealLogAnalysis(unittest.TestCase):
         redial['observed_mono_ns']=100_002_000_000
         with self.assertRaisesRegex(ValueError,'retry'): verify_t1(records+[redial],records[0],requests)
         requests[0].update(connection='local:0',write_callbacks='1')
+        refreshed=copy.deepcopy(records)
+        refreshed[0]['connection_refresh']='ready_set_change_close_idle'
+        refreshed += [dict(type='pod_event',event_type='ready',pod='new',at=104.),
+                      dict(type='transport_state',tick=0,ready_pods=['initial'],checked_mono_ns=100_100_000_000),
+                      dict(type='transport_state',tick=1,ready_pods=['initial','new'],checked_mono_ns=105_500_000_000),
+                      dict(type='transport_refresh',tick=1,ready_pods=['initial','new'],
+                           requested_mono_ns=105_500_000_000,observed_mono_ns=105_600_000_000,
+                           policy='ready_set_change_close_idle')]
+        verify_t1(refreshed,refreshed[0],requests)
+        with self.assertRaisesRegex(ValueError,'Missing/extra'): verify_t1(refreshed[:-1],refreshed[0],requests)
+        refreshed[-1]['ready_pods']=['initial']
+        with self.assertRaisesRegex(ValueError,'Ready lifecycle'): verify_t1(refreshed,refreshed[0],requests)
         requests[1]['transport_id']='0'
         with self.assertRaisesRegex(ValueError,'assignment'): analyze_run(records,expected_ticks=2,request_rows=requests)
         requests[1]['transport_id']='1'; connections[7]['observed_mono_ns']=101_000_000_000

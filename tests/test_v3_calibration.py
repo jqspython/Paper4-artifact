@@ -51,7 +51,7 @@ class CalibrationProperties(unittest.TestCase):
             rows=[]
             for i in range(11):
                 row=dict(label=f'cal-r2-{i+1:02}',pods='4',per_pod_rps='60',seconds='180',seed='1',
-                         transport_scheme='T1',config_sha256=snapshot_id,status='MEASURED')
+                         transport_scheme='T1',config_sha256=snapshot_id,status='MEASURED',slo_pass='True',fidelity_pass='True')
                 rows.append(row)
                 events=[dict(type='calibration_driver',sender_binary_sha256=binary_id,schedule_sha256='plan',parameters=row),
                         dict(type='complete',schedule_sha256='plan')]
@@ -68,6 +68,52 @@ class CalibrationProperties(unittest.TestCase):
             events[0]['sender_binary_sha256']='different actual binary'
             target.write_text('\n'.join(json.dumps(e) for e in events))
             with self.assertRaisesRegex(ValueError,'Actual calibration sender'): calibrate.qualified_transport(config,root)
+            events[0]['sender_binary_sha256']=binary_id
+            target.write_text('\n'.join(json.dumps(e) for e in events))
+            (work/'replay-static-r2.go').write_text(source,encoding='utf-8',newline='\n')
+            (work/'bin/replay-r2').write_bytes(binary)
+            new_source=source+'lifetime refresh\n'; new_binary=b'repaired sender'
+            new_source_id=hashlib.sha256(new_source.encode()).hexdigest(); new_binary_id=hashlib.sha256(new_binary).hexdigest()
+            repaired=text.replace(source_id,new_source_id).replace(binary_id,new_binary_id).replace('[replay]',
+                '[replay]\nconnection_refresh="ready_set_change_close_idle"').replace('capacity_rps=0','capacity_rps=60').replace('capacity_count_per_tick=0','capacity_count_per_tick=300')
+            (work/'capacity-r2-refresh-config.toml').write_text(repaired,encoding='utf-8',newline='\n')
+            (root/'sysbench/replay.go').write_text(new_source,encoding='utf-8',newline='\n')
+            (work/'bin/replay').write_bytes(new_binary)
+            updated=calibrate.tomllib.loads(repaired)
+            self.assertEqual(calibrate.qualified_transport(updated,root,allow_refresh_pending=True)['capacity_rps'],60)
+            with self.assertRaises(FileNotFoundError): calibrate.qualified_transport(updated,root)
+            row=dict(rows[-1],label='cal-r2-12',pods='8',seconds='300',seed='2026102599',config_sha256=hashlib.sha256(repaired.encode()).hexdigest())
+            rows.append(row)
+            with (root/'results/v3-sys-capacity-r2.csv').open('w',newline='') as stream:
+                writer=csv.DictWriter(stream,fieldnames=rows[0]); writer.writeheader(); writer.writerows(rows)
+            raw_plan=b'synthetic plan'; (work/'cal-r2-12-plan.csv').write_bytes(raw_plan)
+            digest=hashlib.sha256(raw_plan).hexdigest()
+            events=[dict(type='calibration_driver',sender_binary_sha256=new_binary_id,parameters=row,schedule_sha256=digest,planned_requests=1),
+                    dict(type='start',refresh_on_stdin=True,schedule_sha256=digest),
+                    dict(type='complete',schedule_sha256=digest,failed=0,missing_write=0,written=1,planned=1)]
+            (work/'cal-r2-12-events.jsonl').write_text('\n'.join(json.dumps(e) for e in events))
+            (work/'capacity-r2-refresh-decision.json').write_text(json.dumps(dict(status='PASS',selected_capacity=60,short_runs_used=12)))
+            self.assertEqual(calibrate.qualified_transport(updated,root)['capacity_rps'],60)
+            (work/'cal-r2-12-events.jsonl').write_text('\n'.join(json.dumps(e) for e in events[:-1]))
+            with self.assertRaises(ValueError): calibrate.qualified_transport(updated,root)
+            (work/'cal-r2-12-events.jsonl').write_text('\n'.join(json.dumps(e) for e in events))
+            updated['calibration'].update(capacity_rps=70,capacity_count_per_tick=350)
+            with self.assertRaisesRegex(ValueError,'capacity'): calibrate.qualified_transport(updated,root)
+
+    def test_lifecycle_check_uses_only_last_slot_same_capacity_and_plan(self):
+        with tempfile.TemporaryDirectory(dir=calibrate.WORK.parent,prefix='r2-last-slot-') as directory:
+            root=Path(directory); (root/'configs').mkdir(); (root/'configs/v3-sys.toml').write_text('test=1')
+            fields=calibrate.FIELDS+('transport_scheme','probe','config_sha256')
+            with patch.object(calibrate,'ROOT',root),patch.object(calibrate,'LEDGER',root/'ledger.csv'), \
+                 patch.object(calibrate,'DECISION',root/'decision.json'),patch.object(calibrate,'ROUND',2), \
+                 patch.object(calibrate,'FIELDS',fields),patch.object(calibrate,'REFRESH_CHECK',True):
+                calibrate.DECISION.write_text(json.dumps(dict(status='PASS',selected_capacity=70)))
+                calibrate.write_rows([dict.fromkeys(fields,'')|dict(number=i+1,label=f'cal-r2-{i+1:02}',status='MEASURED') for i in range(11)])
+                with self.assertRaises(RuntimeError): calibrate.register('eight_pod_fidelity',8,60,300,2026102599,False)
+                row=calibrate.register('eight_pod_fidelity',8,70,300,2026102599,False)
+                self.assertEqual(row['label'],'cal-r2-12')
+                calibrate.finish(row,dict(status='MEASURED'))
+                with self.assertRaises(RuntimeError): calibrate.register('eight_pod_fidelity',8,70,300,2026102599,False)
 
     def test_round_two_full_selection_and_late_distribution_stop(self):
         for imbalance_at in (None,5):

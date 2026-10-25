@@ -297,6 +297,8 @@ def verified_artifact(root, path, started, inside, total):
     config = tomllib.loads((Path(root)/"configs/v3-sys.toml").read_text("utf-8"))
     if meta.get('transport_scheme','legacy')!=config.get('replay',{}).get('transport_scheme','legacy'):
         raise ValueError("Completed artifact transport differs from the calibrated scheme")
+    if meta.get('connection_refresh','none')!=config.get('replay',{}).get('connection_refresh','none'):
+        raise ValueError('Completed artifact T1 lifetime policy differs')
     result = analyze(path,capacity_rps=config["calibration"]["capacity_rps"])
     if result["status"] != "RUN_LOG_ANALYZED" or result["schedule_hash_content_verification"] != "VERIFIED" or result["latency"]["status"] != "REQUEST_CSV_RECOMPUTED":
         raise ValueError("Independent real-log/request/plan evidence incomplete")

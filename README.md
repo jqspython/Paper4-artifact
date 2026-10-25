@@ -111,8 +111,12 @@ checks, separate from both the six earlier shakedowns and study endpoints.
 
 The second-round T1 sender uses 256 independent single-connection transports,
 preconnected before measurement and assigned by planned request ID modulo 256.
-Static calibration and actuator checks do not establish dynamic load sharing:
-connections established with only the initial Pod can remain pinned there
-after more Pods become Ready. The current configuration remains NOT_FROZEN
-and formal comparisons are blocked; this limitation is not silently repaired
-by changing the transport or reusing another calibration's qualification.
+The original synthetic scaling check exposed connections pinned to the initial Pod.
+The same T1 scheme now closes idle connections only when Ready membership changes;
+planned request IDs, deadlines, Service routing and all D1-D10 semantics are retained.
+The final twelfth calibration checked the repaired sender at the unchanged c=70,
+and one synthetic scaling regression exercised redistribution and actuator paths.
+Both rounds contain 17 calibration attempts in total; earlier failures are retained locally.
+These checks are not formal controller comparisons or proof of production SLO performance.
+All 78 formal slots remain NOT_RUN. A host pending reboot or unprotected maintenance
+window prevents launch even after design freeze; the maintenance guard is unchanged.

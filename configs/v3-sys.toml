@@ -1,9 +1,10 @@
-version = "v3-sys-capacity-round2-20261025"
-status = "NOT_FROZEN"
+version = "v3-sys-design-v2"
+status = "FROZEN"
 design_decision_date = "2026-10-25"
-implementation = "STATIC_CAPACITY_AND_COMPONENT_PASS_FORMAL_BLOCKED_DYNAMIC_T1_PINNING"
+implementation = "T1_CAPACITY_FIDELITY_COMPONENT_PASS_FORMAL_NOT_RUN"
 formal_runs_started = false # Freeze-time snapshot only; runtime state belongs to the append-only ledger.
-freeze_tag = "PENDING"
+freeze_tag = "v3-sys-design-v2"
+freeze_reason = "Round1 fresh connections caused failures; round2 uses independent connection rotation and a bounded Ready-change idle-refresh repair"
 
 [observed_environment]
 measurement_date = "2026-10-22"
@@ -97,8 +98,8 @@ reason = "Recalibrate under formal Poisson arrivals; v1 capacity was from consta
 
 [poisson_round2]
 authorization_date = "2026-10-25"
-status = "PASS_11_RUNS_T1_ONLY"
-short_runs_used = 11
+status = "PASS_12_RUNS_T1_ONLY_CAPACITY_UNCHANGED"
+short_runs_used = 12
 first_round_runs_retained = 5
 T2_used = false
 measured_configuration_snapshot = "work/v3-sys/capacity-r2-config.toml"
@@ -153,8 +154,8 @@ shakedown_failed_attempts_count = true
 
 [replay]
 go_version = "1.27.3"
-sender_source_sha256 = "ce9d54bbe2505fbcf495d7ca4973a585f7c399e9fa004c3d7f96c01ffaedbf2b"
-sender_binary_sha256 = "4465fc587c033ff7ac4f8bd15e131f8ff4c8fd7fa575c73b0929148969b8512f"
+sender_source_sha256 = "adb2599d06cecc79f7c6d43bbc1607c7ffdf4f54e7f3a20a09df4e7422663ad4"
+sender_binary_sha256 = "26b775da415d15a57ce9e727d74c9f8784374446cd89359017265355da595233"
 sender_source_hash_canonicalization = "utf8_universal_newlines"
 clock = "monotonic_absolute_deadlines"
 controller_input = "planned_timestamp_count_in_tick"
@@ -165,7 +166,8 @@ late_missing_error_counts_separate = true
 response_paces_next_request = false
 fresh_connections = false
 transport_scheme = "T1"
-implementation_status = "T1_STATIC_PASS_DYNAMIC_CONNECTION_PINNING_OBSERVED"
+connection_refresh = "ready_set_change_close_idle"
+implementation_status = "T1_SLOT_ASSIGNMENT_UNCHANGED_LIFECYCLE_FIDELITY_PASS"
 
 [metrics]
 capacity_loss = "planned_count_gt_capacity_count_per_tick_times_tick_start_ready"
@@ -282,9 +284,9 @@ startup_contract_seconds_unchanged = 35
 counts_toward_shakedown_limit = true
 
 [validation.sender_fidelity]
-status = "ROUND2_PASS_CAL_R2_11"
-observed_p99_ms = 1.162108
-observed_cpu_fraction_of_bound_cores = 0.07776557333333332
+status = "ROUND2_REFRESH_PASS_CAL_R2_12"
+observed_p99_ms = 1.143164
+observed_cpu_fraction_of_bound_cores = 0.07169044333333333
 rate_rps = 560
 duration_seconds = 300
 lateness_origin = "actual_dispatch_minus_planned_send"
@@ -323,7 +325,26 @@ inflight_blocked_ticks = 3
 stable_shrink_actions = 1
 monitor_flags = 0
 dynamic_connection_distribution = "ALL_44_REQUESTS_TO_INITIAL_POD_DURING_FIVE_READY_INTERVAL"
-formal_blocker = "CALIBRATED_STATIC_CAPACITY_NOT_TRANSFERABLE_TO_INITIAL_ONE_POD_T1_PATH"
+formal_blocker = "HISTORICAL_PINNING_CLOSED_BY_LIFECYCLE_REPAIR_COMPONENT"
+
+[validation.lifecycle_repair]
+status = "PASS_SOURCE_FIDELITY_COMPONENT_INDEPENDENT_RECHECK"
+component_requests = 300
+component_failed_requests = 0
+component_refresh_ticks = [5, 9, 17]
+component_redials = 274
+component_monitor_flags = 0
+component_lateness_p99_ms_descriptive = 2.354595
+component_is_D10_test = false
+post_delete_response_requests_descriptive = 1
+capacity_reselection_allowed = false
+fidelity_slot = "cal-r2-12"
+same_capacity_rps = 70
+same_final_seed = 2026102599
+maximum_additional_calibrations = 1
+component_regression_ledger = "results/v3-sys-component-r2-refresh.csv"
+maximum_regression_runs = 1
+failure_action = "FINAL_FALLBACK_A_NO_THIRTEENTH_CALIBRATION"
 
 [archive]
 local_tick_jsonl_allowed = true
@@ -339,7 +360,7 @@ paper4_repository_private = true
 timezone = "Asia/Shanghai"
 feasibility_adapter_cutoff = "2026-10-27"
 fallback = "A_BASE_MANUSCRIPT_BY_2026_10_31_SYSTEM_FUTURE_WORK"
-formal_window = "NOT_STARTED_DYNAMIC_TRANSPORT_SEMANTICS_NEED_USER_DECISION"
+formal_window = "NOT_STARTED_HOST_PENDING_REBOOT_AND_PROTECTED_MAINTENANCE_REQUIRED"
 latest_formal_start_shanghai = "2026-10-27_MORNING"
 formal_completion_cutoff_shanghai = "2026-10-30"
 combined_manuscript_review = "2026-11-06"

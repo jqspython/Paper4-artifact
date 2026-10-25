@@ -23,6 +23,21 @@ ROOT=Path(__file__).resolve().parents[1]
 WORK=ROOT/"work/v3-sys"
 
 
+def ready_ids(runtime):
+    return tuple(sorted(n for n,v in runtime.items.items() if v['ready'] is not None and v['deleted'] is None))
+
+
+def refresh_t1(child, runtime, previous, tick, save=lambda row: None):
+    """After the unchanged control step, refresh lifetime only on observed membership change."""
+    current=ready_ids(runtime)
+    checked=time.monotonic_ns()
+    save(dict(type='transport_state',tick=tick,ready_pods=current,checked_mono_ns=checked))
+    if current!=previous:
+        child.stdin.write(json.dumps(dict(tick=tick,ready_pods=current,requested_mono_ns=checked))+'\n')
+        child.stdin.flush()
+    return current
+
+
 def check_identity(plan_meta, session, config):
     ids=list(csv.DictReader((ROOT/config["selection"]["ids"]).open(encoding="utf-8")))
     identity=plan_meta["source"],plan_meta["app"]
@@ -118,8 +133,11 @@ def run(args):
             "-timeout-ms",str(config["calibration"]["timeout_ms"]),"-slo-ms",str(config["calibration"]["slo_ms"])]
         if config["replay"].get("fresh_connections",False): command.append("-fresh-connections")
         if config["replay"].get("transport_scheme") == "T1": command += ["-independent-transports","256"]
+        refresh=config['replay'].get('connection_refresh')=='ready_set_change_close_idle'
+        if refresh: command += ['-refresh-on-stdin']
+        previous_ready=ready_ids(runtime)
         stderr_file=(WORK/(args.label+"-sender-stderr.log")).open("w",encoding="utf-8")
-        child=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=stderr_file,text=True,
+        child=subprocess.Popen(command,stdin=subprocess.PIPE if refresh else None,stdout=subprocess.PIPE,stderr=stderr_file,text=True,
             preexec_fn=lambda: os.sched_setaffinity(0,{0,2}))
         messages=queue.Queue()
         def receive():
@@ -136,7 +154,7 @@ def run(args):
                 runtime.poll(); events(); continue
             if event is None: break
             if isinstance(event,Exception): raise event
-            if event["type"] in ("connection","transport_ready"):
+            if event["type"] in ("connection","transport_ready","transport_refresh"):
                 save(event)
             elif event["type"]=="start":
                 if event["schedule_sha256"]!=fingerprint: raise ValueError("Sender plan mismatch")
@@ -151,6 +169,7 @@ def run(args):
                     schedule_csv=str(plan.resolve().relative_to(WORK.resolve())),initial_replicas=args.initial_replicas,
                     slot_id=args.slot_id,sender_binary_sha256=hashlib.sha256((WORK/"bin/replay").read_bytes()).hexdigest())
                 meta['transport_scheme']=config['replay'].get('transport_scheme','legacy')
+                meta['connection_refresh']=config['replay'].get('connection_refresh','none')
                 save(meta)
             elif event["type"]=="boundary":
                 if meta is None: raise ValueError("Missing sender clock barrier")
@@ -179,6 +198,7 @@ def run(args):
                         events()  # Preserve actual loss/update and partial API effects.
                         raise RuntimeError(record["error"])
                 ready_at_start,sampled_at=new_ready,new_sampled
+                if refresh and index<plan_meta['ticks']: previous_ready=refresh_t1(child,runtime,previous_ready,index,save)
                 events()
             elif event["type"]=="complete":
                 completed=event

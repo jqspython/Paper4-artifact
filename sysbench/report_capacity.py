@@ -109,33 +109,56 @@ def report_round_two():
         if (len(readiness),success,redial,failed)!=(1,256,0,0):
             lines += ['',f"{r['label']}连接记录：就绪{len(readiness)}、成功拨号{success}、重拨{redial}、拨号失败{failed}。"]
         if r['status']!='MEASURED': lines.append("该点无完整端点："+r['note'])
+    extension=WORK/'capacity-r2-refresh-decision.json'
+    if extension.exists():
+        repair=json.loads(extension.read_text('utf-8'))
+        lines += ['', f"T1生命周期修复的固定容量复核：**{repair['status']}**，仍为c={repair['selected_capacity']}，不重选容量；第12次与旧11点分别留存。"]
+    elif len(rows)==12:
+        lines += ['', '第12次T1生命周期修复复核已登记，结果尚未产生；旧11点静态PASS不替代此次结果。']
     lines += ['', f"连接记录汇总：{sum(r[1]==1 for r in connection_summary)}/{len(rows)}次有唯一预连接就绪记录；"
               f"成功拨号共{sum(r[2] for r in connection_summary)}，重拨{sum(r[3] for r in connection_summary)}，"
               f"拨号失败{sum(r[4] for r in connection_summary)}。原始事件、计划及逐请求连接/响应Pod留在本地work/v3-sys，不公开逐请求数组。"]
-    if decision.get('next_stage')=='FINAL_FALLBACK_A':
-        lines += ["", "第二轮未取得完整资格容量，按用户规则最终回A；不建立v3-sys-design-v2，不运行78个正式槽位，不再追加第三轮。系统比较写为局限/未来工作；原有一次合成实时组件的结论只涉及控制器与监视器实现。"]
-    component_path=ROOT/'results/v3-sys-component-r2.csv'
-    if component_path.exists():
-        with component_path.open(encoding='utf-8') as stream: components=list(csv.DictReader(stream))
-        lines += ['', '## 第二轮实时组件检查（非端点）', '',
-                  '| 状态 | +2动作 | 在途禁缩tick | 缩容动作 | 五tick稳定 | 取消在途 | 监视标志 |',
-                  '|---|---|---|---|---|---|---|']
-        for row in components:
-            lines.append('|'+ '|'.join(row.get(k,'') for k in ('status','plus_two_actions',
-                'inflight_downscale_blocked_ticks','shrink_actions','five_tick_stability',
-                'cancelled_inflight','monitor_flags'))+'|')
-            path=WORK/(row['label']+'-events.jsonl'); requests_path=WORK/(row['label']+'-requests.csv')
-            if path.exists() and requests_path.exists():
-                records=[json.loads(s) for s in path.read_text('utf-8').splitlines()]
-                with requests_path.open(encoding='utf-8') as stream: requests=list(csv.DictReader(stream))
-                diagnostic=component_distribution(records,requests)
-                lines += ['', f"同一次合成恒定负载的描述性分发核对：最多{diagnostic['maximum_ready']}个并发Ready；"
-                    f"只取该Ready数量期间的{diagnostic['planned_requests']}个计划请求，各Pod实际响应数（含零）如下。"
-                    '这不新增测量，不构成HPA或正式片段端点，也不改变组件原有判据。', '',
-                    '| Pod | 响应数 |', '|---|---|']
-                lines += [f'|{p}|{n}|' for p,n in sorted(diagnostic['pod_counts'].items())]
-                lines += ['', f"缺失/不在当时Ready集合的响应：{diagnostic['missing_or_not_ready']}。"
-                    '最大Ready期间的分发诊断与静态4/8Pod校准分开；实际建连时只有1Pod的事实不能由静态通过替代。']
+    if decision.get('next_stage')=='FINAL_FALLBACK_A' or extension.exists() and repair.get('next_stage')=='FINAL_FALLBACK_A':
+        lines += ["", "本轮未完成当前正式发送链的全部资格，按用户规则最终回A；已存在的静态通过与组件动作结果仍保留。不建立v3-sys-design-v2，不运行78个正式槽位，不追加第三轮或第13次校准。系统比较写为局限/未来工作；合成实时组件只支持实际执行过的控制器与监视器路径。"]
+    for component_name,relative in [('第二轮实时组件检查','results/v3-sys-component-r2.csv'),
+                                    ('T1生命周期修复组件回归','results/v3-sys-component-r2-refresh.csv')]:
+        component_path=ROOT/relative
+        if component_path.exists():
+            with component_path.open(encoding='utf-8') as stream: components=list(csv.DictReader(stream))
+            lines += ['', '## '+component_name+'（非端点）', '',
+                      '| 状态 | +2动作 | 在途禁缩tick | 缩容动作 | 五tick稳定 | 取消在途 | 监视标志 |',
+                      '|---|---|---|---|---|---|---|']
+            for row in components:
+                lines.append('|'+ '|'.join(row.get(k,'') for k in ('status','plus_two_actions',
+                    'inflight_downscale_blocked_ticks','shrink_actions','five_tick_stability',
+                    'cancelled_inflight','monitor_flags'))+'|')
+                path=WORK/(row['label']+'-events.jsonl'); requests_path=WORK/(row['label']+'-requests.csv')
+                if path.exists() and requests_path.exists():
+                    records=[json.loads(s) for s in path.read_text('utf-8').splitlines()]
+                    with requests_path.open(encoding='utf-8') as stream: requests=list(csv.DictReader(stream))
+                    diagnostic=component_distribution(records,requests)
+                    lines += ['', f"同一次合成恒定负载的描述性分发核对：最多{diagnostic['maximum_ready']}个并发Ready；"
+                        f"只取该Ready数量期间的{diagnostic['planned_requests']}个计划请求，各Pod实际响应数（含零）如下。"
+                        '这不新增测量，不构成HPA或正式片段端点，也不改变组件原有判据。', '',
+                        '| Pod | 响应数 |', '|---|---|']
+                    lines += [f'|{p}|{n}|' for p,n in sorted(diagnostic['pod_counts'].items())]
+                    lines += ['', f"缺失/不在当时Ready集合的响应：{diagnostic['missing_or_not_ready']}。"
+                        '最大Ready期间的分发诊断与静态4/8Pod校准分开；实际建连时只有1Pod的事实不能由静态通过替代。']
+                    lateness=sorted((int(r['written_ns'])-int(r['offset_ns']))/1e6
+                                    for r in requests if int(r['written_ns'])>=0)
+                    refreshes=[r['tick'] for r in records if r['type']=='transport_refresh']
+                    connections=[r for r in records if r['type']=='connection']
+                    origin,=[r['start_mono_ns']/1e9 for r in records if r['type']=='start']
+                    deleted={r['pod']:r['at'] for r in records
+                             if r['type']=='pod_event' and r['event_type']=='delete'}
+                    after_delete=sum(origin+int(r['offset_ns'])/1e9>=deleted.get(r.get('pod',''),float('inf'))
+                                     for r in requests)
+                    if lateness:
+                        p99=lateness[(99*len(lateness)+99)//100-1]
+                        lines += ['', f"组件描述量：发送迟到p99={p99:.6f}ms；刷新tick={refreshes}；"
+                            f"连接事件{len(connections)}条；计划起点晚于该响应Pod删除调用的请求{after_delete}条。"
+                            '此1RPS组件不是D10最大速率测试，不以其p99重定资格；Service/Pod删除传播并非瞬时，'
+                            '不声称刷新回执后流量立即仅到当前Ready集合。']
     lines += ["", "独立复核见v3-sys-capacity-r2-review.md；同Codex协作体系，不等同外部审核或真实作者签核。", "",
         "技能实效：Ponytail复用既有HTTP/校准/组件路径；CCFA固定预算、选择与准入；scientific-critical-thinking区分分发/发送/服务因果与未完成证据；Nature统计保留每次运行而不把窗口或请求当独立样本作显著性推断。", "",
         "Transport参数与复用语义核对：[Go官方文档](https://pkg.go.dev/net/http#Transport)，本地固定Go1.27.3源transport.go的idleConn记录最近使用连接在列表末端。该机制解释为何单一大池不足以规定请求落点；256独立连接仍须实际分发验证。"]
