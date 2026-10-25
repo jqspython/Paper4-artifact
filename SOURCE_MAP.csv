@@ -9,7 +9,7 @@ configs/cdt-pilot.toml,source,none
 configs/core.toml,source,none
 configs/gate2.toml,source,none
 configs/v2-lite.toml,source,none
-configs/v3-sys.toml,source,none
+configs/v3-sys.toml,source,cancelled-state-projection
 data/processed/gate2/eligible-unit-pool.csv,source,none
 data/processed/gate2/selected-unit-ids.csv,source,none
 data/processed/v2-lite-confirm/selected-unit-ids.csv,source,none

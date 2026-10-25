@@ -13,6 +13,7 @@ import json
 import math
 from pathlib import Path
 import statistics
+from sysbench.arrival import GENERATOR_VERSION
 
 
 ARMS = {"HPA-locked", "HPA-wrapped", "HPA-conservative"}
@@ -426,7 +427,7 @@ def verify_t1(records, meta, request_rows):
 def analyze_run(records, *, expected_ticks=240, request_rows=None, schedule_bytes=None):
     for record in records:
         finite_record(record)
-        if record.get("type") not in {"meta", "tick", "pod_event", "complete", "connection", "transport_ready", "transport_refresh", "transport_state"}:
+        if record.get("type") not in {"meta", "tick", "pod_event", "complete", "connection", "transport_ready", "transport_refresh", "transport_state", "bootstrap_probe"}:
             raise ValueError("Unknown real-log record type")
     metas = [r for r in records if r["type"] == "meta"]
     completes = [r for r in records if r["type"] == "complete"]
@@ -524,6 +525,7 @@ def analyze_run(records, *, expected_ticks=240, request_rows=None, schedule_byte
     plan_status = verify_plan(schedule_bytes, digest, request_rows, expected_ticks)
     result = {key: meta[key] for key in ("run_id", "arm", "source", "app", "delay", "repeat", "schedule_sha256", "c_rps")}
     result.update(status="RUN_LOG_ANALYZED", ticks=expected_ticks,
+                  generator_version=meta.get('generator_version','legacy-unversioned'),
                   capacity_violation_rate=arithmetic["capacity_violation_rate"],
                   max_certificate_error=arithmetic["max_certificate_error"],
                   latency=latency, monitor=monitor, **evidence,
@@ -545,6 +547,8 @@ def analyze_matrix(results, *, high_delay=30, expected_fragments=None):
     for result in results:
         if result["status"] != "RUN_LOG_ANALYZED":
             raise ValueError("Matrix requires real-log analyses, not arithmetic-only rows")
+        if result.get('generator_version')!=GENERATOR_VERSION:
+            raise ValueError('Amended matrix cannot mix legacy or missing schedule generator versions')
         if result["run_id"] in run_ids:
             raise ValueError("Duplicate run identity")
         run_ids.add(result["run_id"])

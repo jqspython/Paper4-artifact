@@ -7,6 +7,7 @@ Failures retain partial logs, terminate offered load, and clean only owned Pods.
 import argparse
 import csv
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path
@@ -15,16 +16,76 @@ import subprocess
 import threading
 import time
 import tomllib
+import urllib.error
+import urllib.request
 
 from sysbench.control import ContractMonitor, TickController, hpa_request
 from sysbench.runtime import Kube, PodRuntime
+from sysbench.arrival import GENERATOR_VERSION
 
 ROOT=Path(__file__).resolve().parents[1]
 WORK=ROOT/"work/v3-sys"
 
 
+def setup_get(url,deadline,phase,emit=lambda row:None):
+    """Retry transient pre-clock GETs within one non-renewable phase deadline."""
+    started=time.monotonic(); refused=attempts=0
+    while True:
+        remaining=deadline-time.monotonic()
+        if remaining<=0: raise TimeoutError('Pre-clock setup budget exhausted: '+phase)
+        attempts+=1; before=time.monotonic(); timeout=min(1,remaining)
+        probe=dict(type='bootstrap_probe',phase=phase,attempt=attempts,at=before,timeout_seconds=timeout)
+        try:
+            with urllib.request.urlopen(url,timeout=timeout) as response:
+                probe['pod']=getattr(response,'headers',{}).get('X-Paper4-Pod','')
+                probe['status']=getattr(response,'status',None)
+                payload=response.read(4097)
+                if len(payload)>4096: raise ValueError('Unexpected oversized setup response')
+            finished=time.monotonic()
+            if finished>deadline: raise TimeoutError('Service response exceeded the pre-clock deadline')
+            emit(dict(probe,finished=finished,outcome='success'))
+            return dict(connection_refusals=refused,seconds=finished-started,attempts=attempts)
+        except (urllib.error.URLError,TimeoutError,ConnectionError,http.client.RemoteDisconnected) as error:
+            cause=error.reason if isinstance(error,urllib.error.URLError) else error
+            transient=isinstance(cause,(TimeoutError,ConnectionRefusedError,ConnectionResetError,http.client.RemoteDisconnected))
+            refused+=int(isinstance(cause,ConnectionRefusedError))
+            if isinstance(error,urllib.error.HTTPError):
+                probe['status']=error.code; probe['pod']=(error.headers or {}).get('X-Paper4-Pod','')
+            emit(dict(probe,finished=time.monotonic(),outcome='failure',error_type=type(error).__name__,
+                      error=str(error),cause_type=type(cause).__name__,transient=transient))
+            if not transient: raise
+            remaining=deadline-time.monotonic()
+            if remaining<=0: raise TimeoutError('Pre-clock setup budget exhausted: '+phase) from error
+            time.sleep(min(.1,remaining))
+
+
+def wait_service(url="http://paper4-v3-sys-worker:30080/health",seconds=15,emit=lambda row:None):
+    return setup_get(url,time.monotonic()+seconds,'service-health',emit)
+
+
+def preheat_service(emit=lambda row:None):
+    started=time.monotonic(); deadline=started+15; attempts=0
+    for index in range(10):
+        result=setup_get('http://paper4-v3-sys-worker:30080/work',deadline,'work-preheat-'+str(index),emit)
+        attempts+=result['attempts']
+        if deadline-time.monotonic()<1: raise TimeoutError('Work preheat cannot complete its fixed final sleep')
+        time.sleep(1)
+        if time.monotonic()>deadline: raise TimeoutError('Work preheat exceeded its phase budget')
+    return dict(successful_work=10,attempts=attempts,seconds=time.monotonic()-started)
+
+
 def ready_ids(runtime):
     return tuple(sorted(n for n,v in runtime.items.items() if v['ready'] is not None and v['deleted'] is None))
+
+
+def receive_sender(stdout,messages,clock_armed):
+    for line in stdout:
+        try:
+            event=json.loads(line)
+            if event.get('type') in ('start','boundary','complete'): clock_armed.set()
+            messages.put(event)
+        except Exception as error: messages.put(error)
+    messages.put(None)
 
 
 def refresh_t1(child, runtime, previous, tick, save=lambda row: None):
@@ -62,6 +123,8 @@ def run(args):
     plan_meta=json.loads(plan.with_suffix(".meta.json").read_text("utf-8"))
     check_identity(plan_meta,args.session,config)
     if args.session is None:
+        if plan_meta.get('generator_version')!=GENERATOR_VERSION:
+            raise ValueError('Formal plan requires the frozen float64 generator version')
         if plan_meta.get("capacity_rps") != config["calibration"]["capacity_rps"]:
             raise ValueError("Formal plan uses a stale capacity calibration")
         if not args.slot_id: raise ValueError("Formal execution requires the reserved fixed slot")
@@ -107,6 +170,7 @@ def run(args):
     partial=log.with_suffix(".partial.jsonl")
     if log.exists() or partial.exists(): raise FileExistsError("Every attempt requires a new immutable run label")
     rows=[]; boundaries=[]; meta=None; child=None; completed=None; event_pos=0; stderr_file=None; primary_error=None
+    clock_armed=threading.Event()
     def save(row):
         rows.append(row)
         with partial.open("a",encoding="utf-8") as out:
@@ -122,12 +186,9 @@ def run(args):
         while runtime.state()!=(args.initial_replicas,0):
             if time.monotonic()>until: raise TimeoutError("Initial warm Pod failed to become Ready")
             time.sleep(.1)
-        # Identical fixed preheat, outside planned arrivals, retained in paid cost.
-        import urllib.request
-        for _ in range(10):
-            with urllib.request.urlopen("http://paper4-v3-sys-worker:30080/work",timeout=1) as response:
-                response.read()
-            time.sleep(1)
+        # Ten successful work preheats; extra transient attempts are logged/billed before the clock.
+        service_wait=wait_service(emit=save)
+        work_preheat=preheat_service(save)
         command=[str(WORK/"bin/replay"),"-schedule",str(plan),"-target","http://paper4-v3-sys-worker:30080/work",
             "-out",str(WORK/(args.label+"-requests.csv")),"-duration",str(duration),
             "-timeout-ms",str(config["calibration"]["timeout_ms"]),"-slo-ms",str(config["calibration"]["slo_ms"])]
@@ -140,12 +201,7 @@ def run(args):
         child=subprocess.Popen(command,stdin=subprocess.PIPE if refresh else None,stdout=subprocess.PIPE,stderr=stderr_file,text=True,
             preexec_fn=lambda: os.sched_setaffinity(0,{0,2}))
         messages=queue.Queue()
-        def receive():
-            for line in child.stdout:
-                try: messages.put(json.loads(line))
-                except Exception as error: messages.put(error)
-            messages.put(None)
-        thread=threading.Thread(target=receive,daemon=True); thread.start()
+        thread=threading.Thread(target=receive_sender,args=(child.stdout,messages,clock_armed),daemon=True); thread.start()
         ready_at_start=None; sampled_at=None; end_watchdog=time.monotonic()+duration+35
         while True:
             if time.monotonic()>end_watchdog: raise TimeoutError("Monotonic run watchdog")
@@ -154,9 +210,10 @@ def run(args):
                 runtime.poll(); events(); continue
             if event is None: break
             if isinstance(event,Exception): raise event
-            if event["type"] in ("connection","transport_ready","transport_refresh"):
+            if event["type"] in ("connection","transport_ready","transport_refresh","bootstrap_probe"):
                 save(event)
             elif event["type"]=="start":
+                clock_armed.set()  # Also latched by the receiver before queueing, independent of API polls.
                 if event["schedule_sha256"]!=fingerprint: raise ValueError("Sender plan mismatch")
                 # These clocks must share the container host's monotonic epoch.
                 if not .5<(event["start_mono_ns"]/1e9-time.monotonic())<3:
@@ -170,6 +227,9 @@ def run(args):
                     slot_id=args.slot_id,sender_binary_sha256=hashlib.sha256((WORK/"bin/replay").read_bytes()).hexdigest())
                 meta['transport_scheme']=config['replay'].get('transport_scheme','legacy')
                 meta['connection_refresh']=config['replay'].get('connection_refresh','none')
+                meta['service_connectivity_wait']=service_wait
+                meta['generator_version']=plan_meta['generator_version']
+                meta['work_preheat']=work_preheat
                 save(meta)
             elif event["type"]=="boundary":
                 if meta is None: raise ValueError("Missing sender clock barrier")
@@ -222,7 +282,8 @@ def run(args):
         print(json.dumps(dict(status="MEASURED_NOT_ADJUDICATED",log=str(log),ticks=plan_meta["ticks"])))
     except BaseException as error:
         primary_error=error
-        try: save(dict(type="infrastructure_failure",error=type(error).__name__+": "+str(error),at=time.monotonic()))
+        try: save(dict(type="infrastructure_failure",error=type(error).__name__+": "+str(error),at=time.monotonic(),
+                       phase='measurement' if clock_armed.is_set() else 'preclock_setup'))
         except Exception: pass  # A failed evidence sink must not prevent cleanup.
         raise
     finally:

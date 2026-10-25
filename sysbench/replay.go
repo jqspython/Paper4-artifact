@@ -139,6 +139,78 @@ func finite(value float64) any {
 
 // T1: distinct one-connection transports, selected by immutable request ID.
 // Warm health requests open every connection before the measurement clock starts.
+func warmHealth(ctx context.Context, client *http.Client, target string, slot int, emit func(any)) error {
+	for attempt := 1; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		probe := map[string]any{"type": "bootstrap_probe", "phase": "t1-health", "transport_id": slot,
+			"attempt": attempt, "started_mono_ns": monoNS()}
+		requestCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		var wrote, firstByte atomic.Int64
+		var connection atomic.Value
+		connection.Store("")
+		var writeError atomic.Value
+		writeError.Store("")
+		trace := &httptrace.ClientTrace{
+			GotConn: func(info httptrace.GotConnInfo) { connection.Store(info.Conn.LocalAddr().String()) },
+			WroteRequest: func(info httptrace.WroteRequestInfo) {
+				wrote.Store(monoNS())
+				if info.Err != nil {
+					writeError.Store(info.Err.Error())
+				} else {
+					writeError.Store("")
+				}
+			},
+			GotFirstResponseByte: func() { firstByte.Store(monoNS()) },
+		}
+		req, err := http.NewRequestWithContext(httptrace.WithClientTrace(requestCtx, trace), "GET", target, nil)
+		if err != nil {
+			cancel()
+			return err
+		}
+		resp, err := client.Do(req)
+		badStatus := false
+		if resp != nil {
+			probe["status"], probe["pod"] = resp.StatusCode, resp.Header.Get("X-Paper4-Pod")
+			badStatus = resp.StatusCode != 200
+			if err == nil {
+				_, err = io.Copy(io.Discard, resp.Body)
+			}
+			resp.Body.Close()
+			if badStatus {
+				err = fmt.Errorf("warm health HTTP %d", resp.StatusCode)
+			}
+		}
+		cancel()
+		if err == nil {
+			err = ctx.Err()
+		}
+		probe["connection"], probe["write_callback_mono_ns"], probe["first_byte_mono_ns"] = connection.Load(), wrote.Load(), firstByte.Load()
+		probe["write_error"] = writeError.Load()
+		probe["finished_mono_ns"] = monoNS()
+		if err == nil {
+			probe["outcome"] = "success"
+			emit(probe)
+			return nil
+		}
+		var netError net.Error
+		transient := !badStatus && (errors.As(err, &netError) && netError.Timeout() || errors.Is(err, io.EOF) ||
+			errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET))
+		probe["outcome"], probe["error"], probe["transient"] = "failure", err.Error(), transient
+		emit(probe)
+		if !transient {
+			return err
+		}
+		client.CloseIdleConnections()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
 func independentClients(target string, count int, emit func(any)) ([]*http.Client, func(), error) {
 	u, err := url.Parse(target)
 	if err != nil || u.Scheme != "http" || u.Host == "" {
@@ -154,6 +226,8 @@ func independentClients(target string, count int, emit func(any)) ([]*http.Clien
 			}
 		}
 	}
+	setupCtx, setupCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer setupCancel()
 	for i := range clients {
 		slot := i
 		var attempts atomic.Int64
@@ -175,17 +249,7 @@ func independentClients(target string, count int, emit func(any)) ([]*http.Clien
 			}}
 		transports[i] = tr
 		clients[i] = &http.Client{Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		req, _ := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
-		resp, e := clients[i].Do(req)
-		if e == nil {
-			_, e = io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
-			if resp.StatusCode != 200 {
-				e = fmt.Errorf("warm health HTTP %d", resp.StatusCode)
-			}
-		}
-		cancel()
+		e := warmHealth(setupCtx, clients[i], u.String(), i, emit)
 		if e != nil {
 			closeAll()
 			return nil, func() {}, fmt.Errorf("T1 preconnect slot %d: %w", i, e)

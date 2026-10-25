@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"math"
@@ -10,8 +11,62 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
+
+func TestHealthSetupDeadlineAndHTTPFailureStayFailures(t *testing.T) {
+	for _, mode := range []string{"deadline", "http"} {
+		t.Run(mode, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if mode == "deadline" {
+					<-r.Context().Done()
+					return
+				}
+				w.WriteHeader(503)
+			}))
+			defer server.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer cancel()
+			probes := 0
+			err := warmHealth(ctx, server.Client(), server.URL, 25, func(v any) {
+				e := v.(map[string]any)
+				probes++
+				if e["type"] != "bootstrap_probe" || e["outcome"] != "failure" {
+					t.Fatal(e)
+				}
+			})
+			if err == nil || probes != 1 {
+				t.Fatal("unbounded or swallowed setup failure", err, probes)
+			}
+		})
+	}
+}
+
+// Inject exactly the observed symptom, not a claim about the old network cause.
+func TestT1TransientHealthTimeoutMustNotDiscardAllPreconnections(t *testing.T) {
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 26 {
+			<-r.Context().Done()
+			return
+		}
+		w.Header().Set("X-Paper4-Pod", "offline-pod")
+		w.Write([]byte("ready\n"))
+	}))
+	defer server.Close()
+	ready := false
+	clients, closeAll, err := independentClients(server.URL, 256, func(v any) {
+		if e := v.(map[string]any); e["type"] == "transport_ready" {
+			ready = true
+		}
+	})
+	defer closeAll()
+	if err != nil || len(clients) != 256 || !ready || calls.Load() != 257 {
+		t.Fatalf("transient pre-clock timeout discarded T1: clients=%d ready=%v calls=%d error=%v", len(clients), ready, calls.Load(), err)
+	}
+}
 
 func TestPlanAndFailedLatency(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "plan.csv")

@@ -22,6 +22,7 @@ import traceback
 from sysbench import matrix
 from sysbench.analyze import analyze
 from sysbench.fragments import prepare_formal
+from sysbench.arrival import GENERATOR_VERSION
 
 ROOT=Path(__file__).resolve().parents[1]
 IMAGE="python:3.11-slim-bookworm@sha256:0a310eeecf4e1f5a0743f9a6520c90c88d089c903ca5fd283f501e3a805f5f89"
@@ -201,6 +202,8 @@ def verify_result(log,slot,plan,config):
     if meta.get("request_csv")!=slot["run_id"]+"-requests.csv" or meta.get("schedule_csv")!=plan.name:
         raise ValueError("Run references unexpected request/schedule artifacts")
     plan_meta=json.loads(plan.with_suffix(".meta.json").read_text("utf-8"))
+    if meta.get('generator_version')!=GENERATOR_VERSION or plan_meta.get('generator_version')!=GENERATOR_VERSION:
+        raise ValueError('Run and plan must use the frozen float64 generator version')
     fingerprint=digest(plan)
     if meta.get("schedule_sha256")!=fingerprint or plan_meta.get("schedule_sha256")!=fingerprint:
         raise ValueError("Run/plan/original-content schedule hashes differ")
@@ -267,6 +270,10 @@ def cleanup_failed(config,slot,stream,*,root=ROOT):
     if failures: raise RuntimeError("Owned cleanup incomplete; "+"; ".join(failures))
 
 
+class PreclockSetupError(RuntimeError):
+    pass
+
+
 def execute_slot(root,slot_id,*,maintenance_ready=False):
     """Reserved attempt -> fixed schedule -> isolated driver -> independent finish."""
     root=Path(root).resolve()
@@ -288,7 +295,13 @@ def execute_slot(root,slot_id,*,maintenance_ready=False):
             launched=True
             completed=subprocess.run(command(root,slot,plan),cwd=root,stdout=out,stderr=err,
                 timeout=WATCHDOG_SECONDS,check=False,**windows_options())
-            if completed.returncode: raise RuntimeError("Container driver failed; retain its full stdout/stderr")
+            if completed.returncode:
+                if partial.exists():
+                    records=[json.loads(s) for s in partial.read_text('utf-8').splitlines() if s.strip()]
+                    if (any(r.get('type')=='infrastructure_failure' and r.get('phase')=='preclock_setup' for r in records)
+                            and not any(r.get('type') in ('meta','tick','complete') for r in records)):
+                        raise PreclockSetupError('Driver setup failed before the formal clock; inspect before spending another attempt')
+                raise RuntimeError("Container driver failed; retain its full stdout/stderr")
         result=verify_result(full,slot,plan,config)
         inside,total=result["loop_in_range_count"],result["loop_interval_count"]
         infrastructure=True; reason="COMPLETE_INDEPENDENT_ARTIFACT_VERIFIED"
@@ -331,7 +344,8 @@ def next_slot(root):
     matrix.require_frozen(root,config)
     manifest=matrix.read_csv(matrix.owned(root,matrix.MANIFEST),matrix.FIELDS)
     if manifest!=expected: raise ValueError("Manifest is not the frozen fixed-ID plan")
-    states=matrix.history(manifest,matrix.read_csv(matrix.owned(root,matrix.LEDGER),matrix.EVENT_FIELDS))
+    states=matrix.history(manifest,matrix.read_csv(matrix.owned(root,matrix.LEDGER),matrix.EVENT_FIELDS),
+                          amendment=matrix.approved_amendment(config))
     if any(r["event"]=="STARTED" for r in states.values()):
         raise RuntimeError("An interrupted/active attempt needs explicit recovery before any new launch")
     if any(r["event"]=="EXHAUSTED" for r in states.values()):
@@ -410,6 +424,8 @@ def self_check():
         demand=np.zeros((1,11760)); demand[0,:4320]=100.; demand[0,11520:]=.05
         data=dict(unit_id=np.array(["toy"]),fit_end=4320,val_end=11520,demand=demand)
         config={"calibration":{"capacity_rps":96}}
+        legacy=toy/'work/v3-sys/v3-toy-plan.csv'
+        legacy.parent.mkdir(parents=True,exist_ok=True); legacy.write_bytes(b'legacy-evidence-must-stay')
         with patch.object(np,"load",return_value=nullcontext(data)),patch.object(
                 fragments,"poisson_timestamps",return_value=(.1,301.1)) as poisson:
             normal=fragments._materialize(config,"azure2019","toy","v3-toy",root=toy)
@@ -422,6 +438,9 @@ def self_check():
             np.testing.assert_array_equal(changed_rates[:60],normal_rates[:60])
             np.testing.assert_array_equal(changed_rates[120:],normal_rates[120:])
         before=normal.read_bytes()
+        assert normal!=legacy and GENERATOR_VERSION in normal.name
+        assert legacy.read_bytes()==b'legacy-evidence-must-stay'
+        assert json.loads(normal.with_suffix('.meta.json').read_text('utf-8'))['generator_version']==GENERATOR_VERSION
         with patch.object(np,"load",side_effect=AssertionError("Cached plan must not reread demand")):
             assert fragments._materialize(config,"azure2019","toy","v3-toy",root=toy)==normal
             meta=normal.with_suffix(".meta.json")
@@ -468,6 +487,8 @@ def main(argv=None,*,root=ROOT):
                 return
             events=execute_slot(root,slot["slot_id"],maintenance_ready=args.maintenance_ready)
             print(events[-1]["event"],slot["slot_id"],"attempt",events[-1]["attempt"])
+            if events[-1]['event']=='INVALID' and events[-1]['reason'] in ('HOST_VALUEERROR','HOST_PRECLOCKSETUPERROR'):
+                raise RuntimeError('Setup/validation error: inspect before spending another rerun')
 
 
 if __name__=="__main__":

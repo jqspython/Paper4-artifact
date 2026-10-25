@@ -13,6 +13,113 @@ from sysbench.runtime import PodRuntime, cost_between, pod
 from sysbench.run import refresh_t1, ready_ids
 from sysbench.execute import reviewed_pending_operations, maintenance
 from sysbench import execute
+from sysbench import run
+import urllib.error
+
+
+class ServiceConnectivity(unittest.TestCase):
+    def test_sender_clock_is_latched_before_consumer_can_block_on_api_poll(self):
+        import queue,threading
+        for event_type in ('start','boundary','complete'):
+            armed=threading.Event(); messages=queue.Queue()
+            run.receive_sender(io.StringIO(json.dumps(dict(type=event_type))+'\n'),messages,armed)
+            self.assertTrue(armed.is_set())  # No main-consumer get() has happened yet.
+            self.assertEqual(messages.get()['type'],event_type)
+        armed=threading.Event()
+        run.receive_sender(io.StringIO('{"type":"connection"}\n'),queue.Queue(),armed)
+        self.assertFalse(armed.is_set())
+
+    def test_body_timeout_preserves_already_observed_backend_and_http_status(self):
+        from contextlib import nullcontext
+        clock=[0.]; events=[]
+        def body_timeout(_): clock[0]=15.; raise TimeoutError('body stalled')
+        response=SimpleNamespace(read=body_timeout,headers={'X-Paper4-Pod':'offline-pod'},status=200)
+        with patch.object(run.urllib.request,'urlopen',return_value=nullcontext(response)),\
+                patch.object(run.time,'monotonic',side_effect=lambda:clock[0]),self.assertRaises(TimeoutError):
+            run.wait_service(emit=events.append)
+        self.assertEqual(events[0]['pod'],'offline-pod'); self.assertEqual(events[0]['status'],200)
+        self.assertEqual(events[0]['error_type'],'TimeoutError'); self.assertIn('body stalled',events[0]['error'])
+
+    def test_response_completing_after_phase_deadline_never_becomes_setup_success(self):
+        from contextlib import nullcontext
+        clock=[0.]; events=[]
+        def late_read(_): clock[0]=20.; return b'ready\n'
+        response=SimpleNamespace(read=late_read,headers={})
+        with patch.object(run.urllib.request,'urlopen',return_value=nullcontext(response)),\
+                patch.object(run.time,'monotonic',side_effect=lambda:clock[0]),self.assertRaises(TimeoutError):
+            run.wait_service(emit=events.append)
+        self.assertEqual([e['outcome'] for e in events],['failure'])
+
+    def test_host_keeps_preclock_failure_classification_without_hiding_clocked_failure(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1]/'work') as directory:
+            root=Path(directory); work=root/'work/v3-sys'; work.mkdir(parents=True)
+            for mode in ('setup','armed-no-meta','clocked'):
+                run_id='offline-'+mode
+                partial=work/(run_id+'.partial.jsonl')
+                records=[dict(type='infrastructure_failure',phase='preclock_setup' if mode=='setup' else 'measurement')]
+                if mode=='clocked': records.append(dict(type='meta'))
+                partial.write_text('\n'.join(map(json.dumps,records))+'\n',encoding='utf-8')
+                slot=dict(run_id=run_id,slot_id='synthetic',attempt='0')
+                with patch.object(execute,'maintenance',return_value={}),patch.object(execute.matrix,'config_and_plan',return_value=({},[])),\
+                        patch.object(execute.matrix,'reserve',return_value=slot),patch.object(execute,'preflight'),\
+                        patch.object(execute,'prepare_formal',return_value=work/'toy-plan.csv'),patch.object(execute,'command',return_value=['offline']),\
+                        patch.object(execute.subprocess,'run',return_value=SimpleNamespace(returncode=1)),patch.object(execute,'cleanup_failed'),\
+                        patch.object(execute.matrix,'finish',return_value=[]) as finish:
+                    execute.execute_slot(root,'synthetic',maintenance_ready=True)
+                self.assertEqual(finish.call_args.kwargs['reason'],'HOST_PRECLOCKSETUPERROR' if mode=='setup' else 'HOST_RUNTIMEERROR')
+
+    def test_transient_health_read_timeout_recovers_inside_the_same_setup_budget(self):
+        from contextlib import nullcontext
+        clock=[0.]; response=SimpleNamespace(read=lambda _:b'ready\n',headers={})
+        with patch.object(run.urllib.request,'urlopen',side_effect=[urllib.error.URLError(TimeoutError()),nullcontext(response)]),\
+                patch.object(run.time,'monotonic',side_effect=lambda:clock[0]),\
+                patch.object(run.time,'sleep',side_effect=lambda delay:clock.__setitem__(0,clock[0]+delay)):
+            result=run.wait_service()
+            self.assertEqual(result['attempts'],2)
+            self.assertEqual(result['connection_refusals'],0)
+
+    def test_refused_service_retries_with_one_shared_deadline(self):
+        from contextlib import nullcontext
+        clock=[0.]; response=SimpleNamespace(read=lambda _:b'OK',headers={})
+        events=[]
+        with patch.object(run.urllib.request,'urlopen',side_effect=[urllib.error.URLError(ConnectionRefusedError()),nullcontext(response)]) as opened, \
+                patch.object(run.time,'monotonic',side_effect=lambda:clock[0]), \
+                patch.object(run.time,'sleep',side_effect=lambda d:clock.__setitem__(0,clock[0]+d)):
+            result=run.wait_service(emit=events.append)
+        self.assertEqual(result,dict(connection_refusals=1,seconds=.1,attempts=2))
+        self.assertEqual(opened.call_count,2)
+        self.assertEqual([e['outcome'] for e in events],['failure','success'])
+
+    def test_persistent_refusal_times_out_and_unexpected_errors_are_not_retried(self):
+        clock=[0.]
+        with patch.object(run.urllib.request,'urlopen',side_effect=urllib.error.URLError(ConnectionRefusedError())) as opened, \
+                patch.object(run.time,'monotonic',side_effect=lambda:clock[0]), \
+                patch.object(run.time,'sleep',side_effect=lambda d:clock.__setitem__(0,clock[0]+d)),self.assertRaises(TimeoutError):
+            run.wait_service(seconds=.05)
+        self.assertEqual(clock[0],.05)
+        self.assertAlmostEqual(opened.call_args.kwargs['timeout'],.05)
+        for error in (urllib.error.URLError(ValueError('unknown')),urllib.error.HTTPError('http://fixture',500,'bad',{},None)):
+            with patch.object(run.urllib.request,'urlopen',side_effect=error) as opened, \
+                    patch.object(run.time,'sleep') as sleep,self.assertRaises(urllib.error.URLError): run.wait_service()
+            self.assertEqual(opened.call_count,1); sleep.assert_not_called()
+
+    def test_fixed_successful_preheat_and_retries_share_one_fifteen_second_budget(self):
+        from contextlib import nullcontext
+        clock=[0.]; response=SimpleNamespace(read=lambda _:b'OK',headers={})
+        with patch.object(run.urllib.request,'urlopen',side_effect=[TimeoutError(),*[nullcontext(response) for _ in range(10)]]) as opened, \
+                patch.object(run.time,'monotonic',side_effect=lambda:clock[0]), \
+                patch.object(run.time,'sleep',side_effect=lambda d:clock.__setitem__(0,clock[0]+d)):
+            result=run.preheat_service()
+        self.assertEqual(result['successful_work'],10); self.assertEqual(result['attempts'],11)
+        self.assertEqual(opened.call_count,11); self.assertAlmostEqual(result['seconds'],10.1)
+        clock[0]=0.
+        with patch.object(run.urllib.request,'urlopen',side_effect=TimeoutError()), \
+                patch.object(run.time,'monotonic',side_effect=lambda:clock[0]), \
+                patch.object(run.time,'sleep',side_effect=lambda d:clock.__setitem__(0,clock[0]+d)),self.assertRaises(TimeoutError):
+            run.preheat_service()
+        self.assertAlmostEqual(clock[0],15.)
 
 
 class MaintenanceClassification(unittest.TestCase):

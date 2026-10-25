@@ -5,6 +5,8 @@ import inspect
 import math
 import random
 
+GENERATOR_VERSION = "python-float64-v1"
+
 
 def poisson_timestamps(rates_rps, *, seed, tick_seconds=5.):
     """Immutable relative seconds for a piecewise-constant Poisson arrival rate.
@@ -17,10 +19,12 @@ def poisson_timestamps(rates_rps, *, seed, tick_seconds=5.):
         raise ValueError("A fixed integer seed is required")
     if not math.isfinite(tick_seconds) or tick_seconds <= 0:
         raise ValueError("tick_seconds must be finite and positive")
+    tick_seconds = float(tick_seconds)
     rng, times = random.Random(seed), []
     for tick, rate in enumerate(rates_rps):
         if isinstance(rate, bool) or not math.isfinite(rate) or rate < 0:
             raise ValueError("Rates must be finite nonnegative requests/second")
+        rate = float(rate)
         if not rate:
             continue
         current, end = tick * tick_seconds, (tick + 1) * tick_seconds

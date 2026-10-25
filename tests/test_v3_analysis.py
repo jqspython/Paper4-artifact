@@ -5,13 +5,14 @@ import unittest
 
 from sysbench.analyze import analyze_matrix, analyze_run, monitor_evidence, request_windows, verify_t1
 from sysbench.control import ContractMonitor, TickController
+from sysbench.arrival import GENERATOR_VERSION
 
 
 def fixture(counts=(1, 1), *, arm="HPA-wrapped", intervals=None, request_errors=()):
     intervals = intervals or [5.] * len(counts)
     monitor = ContractMonitor(96)
     controller = TickController(monitor, wrapped=arm == "HPA-wrapped")
-    meta = dict(type="meta", run_id="artificial", arm=arm, source="source", app="app",
+    meta = dict(type="meta", run_id="artificial", arm=arm, source="source", app="app", generator_version=GENERATOR_VERSION,
                 delay=30, repeat=1, schedule_sha256="a"*64, c_rps=96,
                 slo_ms=18.924, timeout_ms=189.2, start_mono=100., finish_mono=101.+sum(intervals))
     events = [dict(type="pod_event", event_type="create", pod="initial", at=90., accepted=True, command_tick=-1),
@@ -41,6 +42,14 @@ def fixture(counts=(1, 1), *, arm="HPA-wrapped", intervals=None, request_errors=
 
 
 class RealLogAnalysis(unittest.TestCase):
+    def test_preclock_probes_do_not_enter_slo_or_capacity_denominators(self):
+        records,requests=fixture()
+        records.insert(1,dict(type='bootstrap_probe',phase='work-preheat-0',attempt=1,at=91.,finished=92.,outcome='failure',error='TimeoutError'))
+        result=analyze_run(records,expected_ticks=2,request_rows=requests)
+        self.assertEqual(result['ticks'],2)
+        self.assertEqual(result['latency']['planned_requests'],2)
+        self.assertEqual(result['capacity_violation_rate'],0.)
+
     def test_t1_events_require_256_preconnections_and_actual_round_robin(self):
         records,requests=fixture()
         records[0]['transport_scheme']='T1'
@@ -288,7 +297,7 @@ def matrix():
                     cost = (90. if repeat == 1 else 150.) if wrapped else (50. if repeat == 1 else 150.)
                     if delay != 30:
                         cost = 120. if wrapped else 100.
-                    rows.append(dict(status="RUN_LOG_ANALYZED", run_id=f"{i}-{arm}-{delay}-{repeat}",
+                    rows.append(dict(status="RUN_LOG_ANALYZED", generator_version=GENERATOR_VERSION, run_id=f"{i}-{arm}-{delay}-{repeat}",
                         source="source", app=str(i), arm=arm, delay=delay, repeat=repeat,
                         schedule_sha256=str(i)*64, paid_replica_seconds=cost,
                         schedule_hash_content_verification="VERIFIED",
@@ -298,6 +307,11 @@ def matrix():
 
 
 class MatrixAnalysis(unittest.TestCase):
+    def test_legacy_or_missing_schedule_generator_cannot_enter_amended_matrix(self):
+        for version in ('legacy-unversioned',None):
+            rows=matrix(); rows[0]['generator_version']=version
+            with self.assertRaisesRegex(ValueError,'generator versions'): analyze_matrix(rows)
+
     def test_d5_repeat_means_before_ratios_and_nominal_cost_limit_125(self):
         result = analyze_matrix(matrix())
         self.assertEqual(result["high_improved_fragments"], 6)

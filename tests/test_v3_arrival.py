@@ -8,6 +8,15 @@ from sysbench.arrival import dispatch, poisson_timestamps
 
 
 class ArrivalScheduleProperties(unittest.TestCase):
+    def test_float32_rates_use_float64_accumulation_and_match_python_float_reference(self):
+        import numpy as np
+        rates=np.full(240,70.,dtype=np.float32)
+        schedule=poisson_timestamps(rates,seed=42,tick_seconds=np.float32(5.))
+        self.assertEqual(schedule,poisson_timestamps(tuple(map(float,rates)),seed=42))
+        self.assertGreater(len(schedule),80000)
+        self.assertTrue(all(type(t) is float for t in schedule))
+        self.assertTrue(all(a<b for a,b in zip(schedule,schedule[1:])))
+
     def test_local_seed_determinism_global_rng_independence_and_tick_units(self):
         random.seed(10)
         before = random.getstate()

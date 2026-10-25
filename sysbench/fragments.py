@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import tomllib
 
-from sysbench.arrival import poisson_timestamps
+from sysbench.arrival import poisson_timestamps, GENERATOR_VERSION
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -20,6 +20,7 @@ def _plan_metadata(source, app, *, fault, capacity):
         raise ValueError("Positive calibrated capacity and declared arrival fault are required")
     digest=hashlib.sha256(f"v3-sys|20261022|{source}|{app}".encode()).digest()
     return dict(source=source,app=app,ticks=240,seed=int.from_bytes(digest[:8],"big"),fault=fault,
+        generator_version=GENERATOR_VERSION,
         mapping="fitting_prefix_peak_to_4_pods",start_rule="first_240_minutes_of_exploration_test",
         fit_end=4320,val_end=11520,capacity_rps=capacity)
 
@@ -56,7 +57,7 @@ def _materialize(config, source, app, label, *, fault="none", root=ROOT, plan_ke
         raise ValueError("Use a local safe plan label")
     expected=_plan_metadata(source,app,fault=fault,capacity=config["calibration"]["capacity_rps"])
     if plan_key is not None: expected["plan_key"]=plan_key
-    path=Path(root)/"work/v3-sys"/(label+"-plan.csv")
+    path=Path(root)/"work/v3-sys"/(label+"-"+GENERATOR_VERSION+"-plan.csv")
     meta=path.with_suffix(".meta.json")
     if path.exists() or meta.exists(): return _verify_plan(path,expected)
     import numpy as np
@@ -107,7 +108,8 @@ def prepare_formal(slot, *, root=ROOT):
     manifest=matrix.read_csv(matrix.owned(root,matrix.MANIFEST),matrix.FIELDS)
     if manifest!=expected: raise ValueError("Formal manifest differs from the fixed ID plan")
     revision=matrix.require_frozen(root,config)
-    states=matrix.history(manifest,matrix.read_csv(matrix.owned(root,matrix.LEDGER),matrix.EVENT_FIELDS))
+    states=matrix.history(manifest,matrix.read_csv(matrix.owned(root,matrix.LEDGER),matrix.EVENT_FIELDS),
+                          amendment=matrix.approved_amendment(config))
     active=states.get(slot.get("slot_id"))
     if not active or active["event"]!="STARTED" or any(active.get(k)!=v for k,v in slot.items()):
         raise ValueError("Formal materialization requires the active STARTED attempt")

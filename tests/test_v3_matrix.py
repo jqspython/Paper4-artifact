@@ -1,5 +1,5 @@
 """ID-only manifest and D6 state-machine checks; no traces or actual launches."""
-from contextlib import redirect_stdout
+from contextlib import redirect_stdout, nullcontext
 import copy
 import csv
 import hashlib
@@ -148,6 +148,67 @@ fragments = ["huawei_public2023/1455", "huawei_private2023/149"]
         with self.assertRaises(RuntimeError):
             self.reserve()
 
+    def preclock_revision(self, *, measured=False):
+        start=self.reserve()
+        path=self.root/'work'/'v3-sys'/(start['run_id']+'.partial.jsonl'); path.parent.mkdir(parents=True)
+        records=[dict(type='infrastructure_failure',error='synthetic pre-clock refusal')]
+        if measured: records.append(dict(type='tick'))
+        path.write_text('\n'.join(json.dumps(r) for r in records)+'\n',encoding='utf-8')
+        stderr=self.root/'work'/'v3-sys'/'host'/(start['run_id']+'.stderr.log')
+        stderr.parent.mkdir(); stderr.write_text('synthetic independently reviewed pre-clock refusal',encoding='utf-8')
+        matrix.finish(self.root,start['slot_id'],0,run_id=start['run_id'],infrastructure_ok=False,
+                      log_path=path.relative_to(self.root).as_posix())
+        config=self.root/'configs'/'v3-sys.toml'
+        config.write_text(config.read_text('utf-8').replace('freeze_tag = "test-freeze"','freeze_tag = "test-freeze2"')+
+            '\n[execution_compatibility]\nprior_invalid_before_clock_refs = ["test-freeze"]\n'
+            '[execution_compatibility.invalid_before_clock_receipts]\n"'+start['run_id']+'" = "'+hashlib.sha256(path.read_bytes()).hexdigest()+'"\n'+
+            '[execution_compatibility.invalid_before_clock_stderr_receipts]\n"'+start['run_id']+'" = "'+hashlib.sha256(stderr.read_bytes()).hexdigest()+'"\n',encoding='utf-8')
+        return start,path
+
+    def test_declared_preclock_revision_retains_old_bytes_and_spends_original_reruns(self):
+        start,path=self.preclock_revision(); original=(self.root/matrix.LEDGER).read_bytes()
+        with patch('sysbench.matrix.require_frozen',return_value='2'*40),\
+                patch('sysbench.matrix.subprocess.check_output',return_value='1'*40+'\n'):
+            retry=self.reserve(); self.assertEqual(retry['attempt'],'1')
+            self.assertEqual(retry['freeze_tag'],'test-freeze2'); self.assertEqual(retry['freeze_commit'],'2'*40)
+            self.assertTrue((self.root/matrix.LEDGER).read_bytes().startswith(original))
+            self.close(retry,valid=False)
+            final=self.reserve(); self.assertEqual(final['attempt'],'2')
+            self.assertEqual(self.close(final,valid=False)[-1]['event'],'EXHAUSTED')
+            with self.assertRaises(RuntimeError): self.reserve()
+
+    def test_preclock_revision_rejects_changed_receipt_or_unknown_parent(self):
+        start,path=self.preclock_revision()
+        original=path.read_bytes()
+        with patch('sysbench.matrix.require_frozen',return_value='2'*40),\
+                patch('sysbench.matrix.subprocess.check_output',return_value='3'*40+'\n'):
+            with self.assertRaises(ValueError): self.reserve()
+        path.write_text(path.read_text('utf-8')+'\n',encoding='utf-8')
+        with patch('sysbench.matrix.require_frozen',return_value='2'*40),\
+                patch('sysbench.matrix.subprocess.check_output',return_value='1'*40+'\n'):
+            with self.assertRaises(ValueError): self.reserve()
+        path.write_bytes(original)
+        stderr=self.root/'work'/'v3-sys'/'host'/(start['run_id']+'.stderr.log')
+        stderr.write_bytes(stderr.read_bytes()+b'changed')
+        with patch('sysbench.matrix.require_frozen',return_value='2'*40),\
+                patch('sysbench.matrix.subprocess.check_output',return_value='1'*40+'\n'):
+            with self.assertRaises(ValueError): self.reserve()
+
+    def test_preclock_revision_cannot_carry_clocked_failure(self):
+        self.preclock_revision(measured=True)
+        with patch('sysbench.matrix.require_frozen',return_value='2'*40),\
+                patch('sysbench.matrix.subprocess.check_output',return_value='1'*40+'\n'):
+            with self.assertRaises(ValueError): self.reserve()
+
+    def test_preclock_revision_cannot_reopen_or_inherit_an_eligible_old_version(self):
+        start=self.reserve(); self.close(start)
+        config=self.root/'configs'/'v3-sys.toml'
+        config.write_text(config.read_text('utf-8').replace('freeze_tag = "test-freeze"','freeze_tag = "test-freeze2"')+
+            '\n[execution_compatibility]\nprior_invalid_before_clock_refs = ["test-freeze"]\n',encoding='utf-8')
+        with patch('sysbench.matrix.require_frozen',return_value='2'*40),\
+                patch('sysbench.matrix.subprocess.check_output',return_value='1'*40+'\n'):
+            with self.assertRaises(ValueError): self.reserve(self.manifest[1]['slot_id'])
+
     def test_active_slot_wrong_attempt_run_identity_and_log_cannot_be_replaced(self):
         start = self.reserve()
         original = (self.root/matrix.LEDGER).read_bytes()
@@ -260,14 +321,19 @@ fragments = ["huawei_public2023/1455", "huawei_private2023/149"]
         folder = self.root/"work/v3-sys"
         folder.mkdir(parents=True, exist_ok=True)
         plan = b"request_id,offset_ns\n"+b"".join(f"{r['request_id']},{r['offset_ns']}\n".encode() for r in requests)
-        (folder/"plan.csv").write_bytes(plan)
+        from sysbench.fragments import _plan_metadata
+        plan_name=start['plan_key']+'-'+matrix.GENERATOR_VERSION+'-plan.csv'
+        (folder/plan_name).write_bytes(plan)
+        plan_meta=dict(_plan_metadata(start['source'],start['app'],fault=start['arrival_fault'],capacity=96),
+                       plan_key=start['plan_key'],planned_requests=len(requests),schedule_sha256=hashlib.sha256(plan).hexdigest())
+        (folder/plan_name).with_suffix('.meta.json').write_text(json.dumps(plan_meta),encoding='utf-8')
         request_name = start["run_id"]+"-requests.csv"
         with (folder/request_name).open("w", encoding="utf-8", newline="") as stream:
             writer = csv.DictWriter(stream, fieldnames=requests[0])
             writer.writeheader(); writer.writerows(requests)
         records[0].update(run_id=start["run_id"], source=start["source"], app=start["app"],
             delay=int(start["delay"]), repeat=int(start["repeat"]), fault=start["fault"], ticks=240,
-            schedule_sha256=hashlib.sha256(plan).hexdigest(), schedule_csv="plan.csv", request_csv=request_name)
+            schedule_sha256=hashlib.sha256(plan).hexdigest(), schedule_csv=plan_name, request_csv=request_name)
         path = folder/(start["run_id"]+".jsonl")
         path.write_text("\n".join(json.dumps(r, allow_nan=False) for r in records)+"\n", encoding="utf-8")
         return path
@@ -291,8 +357,146 @@ fragments = ["huawei_public2023/1455", "huawei_private2023/149"]
         self.assertIn("VALID", output.getvalue())
         self.assertEqual(len(matrix.eligible_attempts(self.root)), 1)
 
+    def stopped_amendment_fixture(self):
+        """Construct the eleven old events and receipts in a temporary test root."""
+        self.assertEqual([r['slot_id'] for r in self.manifest[:2]],['normal-021','fault-002'])
+        first=self.reserve(); self.close(first,valid=False)
+        old=self.reserve(); self.materialize(old); self.close(old)
+        for _ in range(3):
+            start=self.reserve('fault-002'); self.close(start,valid=False,inside=None,total=None)
+            failure=self.root/'work/v3-sys/host'/(start['run_id']+'.failure.log')
+            failure.parent.mkdir(parents=True,exist_ok=True); failure.write_bytes(b'synthetic deterministic error')
+        folder=self.root/'work/v3-sys'
+        for suffix in ('-plan.csv','-plan.meta.json'):
+            (folder/(old['plan_key']+suffix)).write_bytes(b'synthetic original plan receipt')
+        path=self.root/matrix.LEDGER; original=path.read_bytes()
+        receipts={p.relative_to(self.root).as_posix():hashlib.sha256(p.read_bytes()).hexdigest()
+                  for p in folder.rglob('*') if p.is_file()}
+        amendment=dict(id='d6-float64-20261025',authorization='USER_APPROVED_2026-10-25',
+            activation_tag='test-freeze2',void_slot='normal-021',void_attempt=1,
+            extra_slot='fault-002',extra_attempt=3,legacy_rows=11,
+            legacy_ledger_sha256=hashlib.sha256(original).hexdigest(),evidence=receipts)
+        config=self.root/'configs/v3-sys.toml'
+        text=config.read_text('utf-8').replace('freeze_tag = "test-freeze"','freeze_tag = "test-freeze2"')
+        text+='\n[schedule_generator]\nversion = "'+matrix.GENERATOR_VERSION+'"\n[execution_amendment]\n'
+        text+='\n'.join(k+' = '+json.dumps(v) for k,v in amendment.items() if k!='evidence')
+        text+='\n[execution_amendment.evidence]\n'+'\n'.join(json.dumps(k)+' = '+json.dumps(v) for k,v in receipts.items())+'\n'
+        config.write_text(text,encoding='utf-8')
+        freeze=patch('sysbench.matrix.require_frozen',return_value='2'*40); freeze.start(); self.addCleanup(freeze.stop)
+        frozen_context=text
+        refs=patch('sysbench.matrix.subprocess.check_output',side_effect=lambda args,**kw:
+            frozen_context if args[1]=='show' else ('2' if 'test-freeze2' in args[-1] else '1')*40+'\n')
+        refs.start(); self.addCleanup(refs.stop)
+        return amendment,original,old
+
+    def test_approved_amendment_appends_two_bound_events_once_and_preserves_old_bytes(self):
+        amendment,original,old=self.stopped_amendment_fixture()
+        with self.assertRaises(RuntimeError): self.reserve()  # Approval alone does not clear EXHAUSTED.
+        result=matrix.apply_amendment(self.root)
+        self.assertEqual(result['status'],'APPLIED_TWO_APPEND_ONLY_EVENTS')
+        path=self.root/matrix.LEDGER
+        self.assertTrue(path.read_bytes().startswith(original))
+        rows=matrix.read_csv(path,matrix.EVENT_FIELDS)
+        self.assertEqual([r['event'] for r in rows[-2:]],['VOID_IMPLEMENTATION','RETRY_AUTHORIZED'])
+        self.assertEqual(rows[-2]['run_id'],old['run_id'])
+        self.assertEqual(rows[-2]['freeze_commit'],'1'*40)  # Original identity never rewritten.
+        self.assertTrue(all(r['reason']==matrix.amendment_reason(amendment,'2'*40) for r in rows[-2:]))
+        before=path.read_bytes()
+        self.assertEqual(matrix.apply_amendment(self.root)['status'],'ALREADY_APPLIED_NO_NEW_EVENTS')
+        self.assertEqual(path.read_bytes(),before)
+        self.assertEqual(matrix.eligible_attempts(self.root),[])  # Old VALID no longer eligible.
+
+    def test_normal_replacement_spends_only_original_a2_and_cannot_reopen_a3(self):
+        amendment,_,_=self.stopped_amendment_fixture(); matrix.apply_amendment(self.root)
+        start=self.reserve(); self.assertEqual(start['attempt'],'2')
+        self.assertEqual(self.close(start,valid=False)[-1]['event'],'EXHAUSTED')
+        with self.assertRaises(RuntimeError): self.reserve()
+        with self.assertRaises(RuntimeError): self.reserve('fault-002')
+
+    def test_only_fault002_gets_a3_then_exhausts_no_a4_or_other_budget_extension(self):
+        amendment,_,_=self.stopped_amendment_fixture(); matrix.apply_amendment(self.root)
+        first=self.reserve(); self.materialize(first); self.close(first)
+        self.assertEqual([(r['slot_id'],r['attempt']) for r in matrix.eligible_attempts(self.root)],[('normal-021','2')])
+        extra=self.reserve('fault-002'); self.assertEqual(extra['attempt'],'3')
+        events=self.close(extra,valid=False)
+        self.assertEqual([r['event'] for r in events],['INVALID','EXHAUSTED'])
+        with self.assertRaises(RuntimeError): self.reserve('fault-002')
+        self.assertEqual({r['slot_id'] for r in self.manifest if matrix.retry_limit(r['slot_id'],amendment)==3},{'fault-002'})
+
+    def test_amendment_rejects_changed_old_ledger_artifact_scope_or_reference(self):
+        amendment,original,_=self.stopped_amendment_fixture()
+        config=matrix.config_and_plan(self.root)[0]
+        path=self.root/matrix.LEDGER
+        path.write_bytes(original.replace(b'RESERVED_BEFORE_EXECUTION',b'ALTERED_BEFORE_EXECUTION',1))
+        with self.assertRaisesRegex(ValueError,'prefix changed'): matrix.apply_amendment(self.root)
+        path.write_bytes(original)
+        receipt=self.root/next(iter(amendment['evidence']))
+        saved=receipt.read_bytes(); receipt.write_bytes(saved+b'changed')
+        with self.assertRaisesRegex(ValueError,'artifact changed'): matrix.apply_amendment(self.root)
+        receipt.write_bytes(saved)
+        with patch('sysbench.matrix.subprocess.check_output',return_value='3'*40+'\n'):
+            with self.assertRaisesRegex(ValueError,'identity changed'): matrix.apply_amendment(self.root)
+        for key,value in (('extra_slot','fault-003'),('extra_attempt',4),('void_attempt',0),('legacy_rows',10),('authorization','AI_APPROVED')):
+            bad=copy.deepcopy(config); bad['execution_amendment'][key]=value
+            with self.assertRaises(ValueError): matrix.approved_amendment(bad)
+        self.assertEqual(path.read_bytes(),original)
+
+    def test_half_applied_duplicate_or_unbound_administrative_events_are_rejected(self):
+        _,_,_=self.stopped_amendment_fixture(); matrix.apply_amendment(self.root)
+        path=self.root/matrix.LEDGER; saved=path.read_bytes(); lines=saved.splitlines(keepends=True)
+        for changed in (b''.join(lines[:-1]),saved+lines[-1],saved.replace(b'USER_APPROVED_D6:',b'UNBOUND_D6:')):
+            path.write_bytes(changed)
+            with self.assertRaises(ValueError): matrix.apply_amendment(self.root)
+        path.write_bytes(saved)
+
+    def test_missing_generator_or_legacy_valid_is_rejected_by_current_eligibility(self):
+        _,_,_=self.stopped_amendment_fixture(); matrix.apply_amendment(self.root)
+        current=self.reserve(); path=self.materialize(current); self.close(current)
+        records=[json.loads(line) for line in path.read_text('utf-8').splitlines()]
+        records[0].pop('generator_version')
+        path.write_text('\n'.join(map(json.dumps,records))+'\n',encoding='utf-8')
+        with self.assertRaisesRegex(ValueError,'legacy VALID'): matrix.eligible_attempts(self.root)
+
+    def test_amended_active_attempt_still_logs_invalid_when_live_config_is_broken(self):
+        self.stopped_amendment_fixture(); matrix.apply_amendment(self.root)
+        current=self.reserve(); self.materialize(current)
+        (self.root/'configs/v3-sys.toml').write_bytes(b'broken TOML')
+        events=self.close(current)
+        self.assertEqual([r['event'] for r in events],['INVALID','EXHAUSTED'])
+        self.assertIn('FREEZE_OR_ARTIFACT_INVALID',events[0]['reason'])
+
+    def test_independent_finish_rejects_legacy_plan_even_with_current_run_version(self):
+        self.allow_artifact.stop()
+        current=self.reserve(); path=self.materialize(current)
+        records=[json.loads(line) for line in path.read_text('utf-8').splitlines()]
+        (path.parent/'old-plan.csv').write_bytes((path.parent/records[0]['schedule_csv']).read_bytes())
+        records[0]['schedule_csv']='old-plan.csv'
+        path.write_text('\n'.join(map(json.dumps,records))+'\n',encoding='utf-8')
+        events=self.close(current)
+        self.assertEqual(events[0]['event'],'INVALID')
+        self.assertIn('exact versioned',events[0]['reason'])
+
+    def test_independent_finish_rejects_changed_plan_generator_identity(self):
+        self.allow_artifact.stop()
+        current=self.reserve(); path=self.materialize(current)
+        meta=json.loads(path.read_text('utf-8').splitlines()[0])
+        plan_meta=(path.parent/meta['schedule_csv']).with_suffix('.meta.json')
+        changed=json.loads(plan_meta.read_text('utf-8')); changed.pop('generator_version')
+        plan_meta.write_text(json.dumps(changed),encoding='utf-8')
+        self.assertEqual(self.close(current)[0]['event'],'INVALID')
+
 
 class FreezeChecks(unittest.TestCase):
+    def test_canonical_all_stops_after_one_deterministic_validation_failure(self):
+        from sysbench import execute
+        for reason in ('HOST_VALUEERROR','HOST_PRECLOCKSETUPERROR'):
+            failure=dict(event='INVALID',reason=reason,attempt='0')
+            with patch.object(execute,'maintenance'),patch.object(execute,'awake',return_value=nullcontext()),\
+                    patch.object(execute,'next_slot',return_value=({'slot_id':'normal-001'},{})),\
+                    patch.object(execute,'execute_slot',return_value=[failure]) as launch,redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(RuntimeError,'before spending'): execute.main(['--all','--maintenance-ready'])
+                self.assertEqual(launch.call_count,1)
+
     def test_tag_diff_and_untracked_source_all_gate_formal_reserve(self):
         config = dict(status="FROZEN", freeze_tag="test-freeze")
         ok = subprocess.CompletedProcess([], 0, "", "")

@@ -9,10 +9,31 @@ The private Paper4 research repository is not made public by this snapshot.
 The code includes the discrete actuator, decision-loss feedback, PAC-h calibration,
 four-base wrapper, analysis and data-preparation functions, synthetic property
 tests, and the current small-scale system implementation. The complete v3 system
-matrix (72 formal comparisons plus six fault runs) is NOT_RUN. System code is an
-implementation snapshot, not evidence of completed controlled-testbed validation.
-The configuration records the study's design-freeze state. A design freeze,
-engineering checks and feasibility measurements do not establish formal outcomes.
+matrix (72 formal comparisons plus six fault runs) was CANCELLED_INCOMPLETE by
+the project owner. Ten attempts yielded seven pre-clock failures and three
+complete historical records; one was superseded, leaving two current records.
+The release includes the offline-checked bootstrap retry candidate, not a newly
+qualified workload sender. Its exported system configuration is explicitly
+cancelled and omits private administrative receipt bindings; it is not the
+historical frozen configuration and cannot authorize formal replay.
+
+| Component/check | Validation status | Boundary |
+|---|---|---|
+| Early bounded 64-property snapshot | Historical synthetic checks | Later unit suites are separate; no workload comparison |
+| Post-repair 300-second component check | Historical real container execution | 1 to 3 to 5 to 1; two +2 actions; three pending-addition blocked ticks; four downscale deletions; no spurious flag |
+| Two current complete workload records | Historical real execution | Near-idle 99-request record and one out-of-contract cap demonstration; no controller-effect claim |
+| Monitor/certificate demonstration | One historical cap trajectory | Same-tick cap detection and arithmetic agreement; not six-fault validation |
+| Bootstrap health/warmup retry candidate | Offline tests only | No real-run capacity/fidelity requalification; extra warmup attempts are logged |
+| Full 78-slot matrix | CANCELLED_INCOMPLETE | No paired direction, cost or service-SLO conclusion |
+| Capacity and maximum-rate fidelity for this candidate | NOT_VALIDATED | Earlier static c=70 belongs to a historical binary, not this release's qualification |
+
+In the cap trajectory, 14,044 of 22,230 planned requests had no recorded
+connection acquisition or successful write before their deadline. The source
+starts tasks on an exogenous schedule, but delivered service input did not
+faithfully realize that schedule. Client/transport failures cannot be read as a
+service SLO. One connection per Transport is a constraint, not an identified
+unique cause of non-delivery; the retained same-slot planned gap exceeded the
+request deadline. The original failures and earlier release tags are preserved.
 
 The v1/v2 canonical command-line gates are intentionally unchanged. They refer to
 original private Git freeze tags and protected source records that are absent
@@ -114,11 +135,12 @@ preconnected before measurement and assigned by planned request ID modulo 256.
 The original synthetic scaling check exposed connections pinned to the initial Pod.
 The same T1 scheme now closes idle connections only when Ready membership changes;
 planned request IDs, deadlines, Service routing and all D1-D10 semantics are retained.
-The final twelfth calibration checked the repaired sender at the unchanged c=70,
+The final twelfth calibration checked the historical Ready-refresh sender at unchanged c=70,
+before the offline-only bootstrap retry candidate in this release,
 and one synthetic scaling regression exercised redistribution and actuator paths.
 Both rounds contain 17 calibration attempts in total; earlier failures are retained locally.
 These checks are not formal controller comparisons or proof of production SLO performance.
-All 78 formal slots are NOT_RUN at this execution-freeze export.
+The 78-slot comparison was cancelled incomplete; startup repairs remain offline-only.
 The host guard retains update-reboot checks and records narrowly reviewed delayed cleanup
 without editing the OS queue. Unknown operations or changed identities still block;
 Windows Update Agent and a measured update-pause window are also checked before launch.
