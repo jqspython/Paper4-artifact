@@ -145,6 +145,9 @@ def require_frozen(root, config):
     untracked = git("ls-files", "--others", "--exclude-standard", "--", *CRITICAL)
     if diff.returncode or untracked.returncode or untracked.stdout.strip():
         raise RuntimeError("Critical v3 files differ from the frozen tag or contain untracked source")
+    if config.get('replay',{}).get('transport_scheme')=='T1':
+        from sysbench.calibrate import qualified_transport
+        qualified_transport(config,root)
     return revision
 
 
@@ -292,6 +295,8 @@ def verified_artifact(root, path, started, inside, total):
     if meta.get("session") is not None:
         raise ValueError("A shakedown artifact cannot be a formal eligible attempt")
     config = tomllib.loads((Path(root)/"configs/v3-sys.toml").read_text("utf-8"))
+    if meta.get('transport_scheme','legacy')!=config.get('replay',{}).get('transport_scheme','legacy'):
+        raise ValueError("Completed artifact transport differs from the calibrated scheme")
     result = analyze(path,capacity_rps=config["calibration"]["capacity_rps"])
     if result["status"] != "RUN_LOG_ANALYZED" or result["schedule_hash_content_verification"] != "VERIFIED" or result["latency"]["status"] != "REQUEST_CSV_RECOMPUTED":
         raise ValueError("Independent real-log/request/plan evidence incomplete")

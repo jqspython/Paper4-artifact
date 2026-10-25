@@ -48,7 +48,7 @@ def pod(name, owner, delay):
             "env":[{"name":"STARTUP_SLEEP","value":str(delay)}],"ports":[{"containerPort":8080}],
             "resources":{"requests":{"cpu":"250m","memory":"64Mi"},"limits":{"cpu":"250m","memory":"128Mi"}},
             "readinessProbe":{"httpGet":{"path":"/health","port":8080},"periodSeconds":1,
-                "timeoutSeconds":1,"failureThreshold":1}}]}}
+                "timeoutSeconds":2,"failureThreshold":3}}]}}
 
 
 class PodRuntime:
@@ -103,6 +103,8 @@ class PodRuntime:
                 raise RuntimeError("Unexpected Pod exit/deletion; preserve invalid run")
             is_ready=any(c["type"]=="Ready" and c["status"]=="True" for c in item["status"].get("conditions",[]))
             if saved["ready"] is not None and not is_ready:
+                self.events.append(dict(type="ready_regression",pod=name,at=observed,
+                    observed_status=item["status"],note="retained_before_abort_not_an_automatic_retry"))
                 raise RuntimeError("Ready Pod became NotReady; execution contract unverified")
             if is_ready:
                 ready_names.append(name)

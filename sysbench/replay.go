@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptrace"
+	"net/url"
 	"os"
 	"runtime"
 	"sort"
@@ -33,6 +34,8 @@ type record struct {
 	Code                  int
 	Error                 string
 	Pod                   string
+	Transport             int
+	Connection            string
 }
 
 // The calibrated Python HTTP/1.1 server writes headers/body separately.
@@ -134,6 +137,65 @@ func finite(value float64) any {
 	return value
 }
 
+// T1: distinct one-connection transports, selected by immutable request ID.
+// Warm health requests open every connection before the measurement clock starts.
+func independentClients(target string, count int, emit func(any)) ([]*http.Client, func(), error) {
+	u, err := url.Parse(target)
+	if err != nil || u.Scheme != "http" || u.Host == "" {
+		return nil, func() {}, errors.New("T1 requires a single HTTP Service target")
+	}
+	u.Path, u.RawQuery = "/health", ""
+	clients := make([]*http.Client, count)
+	transports := make([]*http.Transport, count)
+	closeAll := func() {
+		for _, tr := range transports {
+			if tr != nil {
+				tr.CloseIdleConnections()
+			}
+		}
+	}
+	for i := range clients {
+		slot := i
+		var attempts atomic.Int64
+		dialer := &net.Dialer{Timeout: time.Second, KeepAlive: 30 * time.Second}
+		tr := &http.Transport{MaxConnsPerHost: 1, MaxIdleConns: 1, MaxIdleConnsPerHost: 1,
+			DisableCompression: true, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+				attempt := attempts.Add(1)
+				conn, e := dialer.DialContext(ctx, network, address)
+				event := map[string]any{"type": "connection", "transport_id": slot, "dial_attempt": attempt,
+					"redial": attempt > 1, "observed_mono_ns": monoNS(), "success": e == nil}
+				if e != nil {
+					event["error"] = e.Error()
+					emit(event)
+					return nil, e
+				}
+				event["local_address"], event["remote_address"] = conn.LocalAddr().String(), conn.RemoteAddr().String()
+				emit(event)
+				return &ackConn{conn.(*net.TCPConn)}, nil
+			}}
+		transports[i] = tr
+		clients[i] = &http.Client{Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		req, _ := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
+		resp, e := clients[i].Do(req)
+		if e == nil {
+			_, e = io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != 200 {
+				e = fmt.Errorf("warm health HTTP %d", resp.StatusCode)
+			}
+		}
+		cancel()
+		if e != nil {
+			closeAll()
+			return nil, func() {}, fmt.Errorf("T1 preconnect slot %d: %w", i, e)
+		}
+	}
+	emit(map[string]any{"type": "transport_ready", "scheme": "T1", "independent_transports": count,
+		"max_connections_per_transport": 1, "assignment": "request_id_mod_256", "preconnected": count})
+	return clients, closeAll, nil
+}
+
 func main() {
 	if runtime.GOOS != "linux" {
 		panic("CLOCK_MONOTONIC replay must run in Linux")
@@ -145,7 +207,11 @@ func main() {
 	timeout := flag.Float64("timeout-ms", 189.2, "planned-time deadline, milliseconds")
 	slo := flag.Float64("slo-ms", 18.924, "window p95 limit")
 	fresh := flag.Bool("fresh-connections", false, "disable reuse uniformly if the backend balance check fails")
+	independent := flag.Int("independent-transports", 0, "T1: exactly 256 independent single-connection transports")
 	flag.Parse()
+	if (*independent != 0 && *independent != 256) || (*independent != 0 && *fresh) {
+		panic("T1 requires 256 transports and connection reuse")
+	}
 	if *duration <= 0 || *timeout <= 0 || *target == "" || *out == "" || *duration/5 != math.Trunc(*duration/5) {
 		panic("invalid replay arguments")
 	}
@@ -177,6 +243,15 @@ func main() {
 			panic(e)
 		}
 	}
+	clients := []*http.Client{client}
+	if *independent != 0 {
+		var closeAll func()
+		clients, closeAll, err = independentClients(*target, *independent, emit)
+		if err != nil {
+			panic(err)
+		}
+		defer closeAll()
+	}
 	// Python's Linux time.monotonic_ns and this CLOCK_MONOTONIC share a domain.
 	origin := monoNS() + int64(2*time.Second)
 	emit(map[string]any{"type": "start", "start_mono_ns": origin, "schedule_sha256": hash, "planned_requests": len(records), "duration_seconds": *duration, "clock": "Linux CLOCK_MONOTONIC", "write_timestamp": "httptrace.WroteRequest"})
@@ -203,6 +278,7 @@ func main() {
 		go func(index int) {
 			defer requests.Done()
 			rec := &records[index]
+			rec.Transport = index % len(clients)
 			remaining := origin + rec.Offset + int64(*timeout*1e6) - monoNS()
 			if remaining <= 0 {
 				rec.Error = "late_before_write"
@@ -211,7 +287,7 @@ func main() {
 			}
 			reqctx, finish := context.WithTimeout(ctx, time.Duration(remaining))
 			defer finish()
-			trace := &httptrace.ClientTrace{WroteRequest: func(info httptrace.WroteRequestInfo) {
+			trace := &httptrace.ClientTrace{GotConn: func(info httptrace.GotConnInfo) { rec.Connection = info.Conn.LocalAddr().String() }, WroteRequest: func(info httptrace.WroteRequestInfo) {
 				atomic.AddInt64(&rec.WriteCallbacks, 1)
 				if info.Err == nil {
 					atomic.CompareAndSwapInt64(&rec.Written, -1, monoNS()-origin)
@@ -223,7 +299,7 @@ func main() {
 				rec.Done = monoNS() - origin
 				return
 			}
-			resp, e := client.Do(req)
+			resp, e := clients[rec.Transport].Do(req)
 			if e == nil {
 				rec.Code = resp.StatusCode
 				rec.Pod = resp.Header.Get("X-Paper4-Pod")
@@ -260,7 +336,7 @@ func main() {
 		panic(err)
 	}
 	w := csv.NewWriter(f)
-	w.Write([]string{"request_id", "offset_ns", "written_ns", "completed_ns", "http_status", "error", "write_callbacks", "pod"})
+	w.Write([]string{"request_id", "offset_ns", "written_ns", "completed_ns", "http_status", "error", "write_callbacks", "pod", "transport_id", "connection"})
 	for i := range records {
 		r := &records[i]
 		writtenAt := atomic.LoadInt64(&r.Written)
@@ -280,7 +356,7 @@ func main() {
 		}
 		latency = append(latency, v)
 		window[r.Offset/int64(5*time.Second)] = append(window[r.Offset/int64(5*time.Second)], v)
-		w.Write([]string{strconv.Itoa(i), strconv.FormatInt(r.Offset, 10), strconv.FormatInt(writtenAt, 10), strconv.FormatInt(r.Done, 10), strconv.Itoa(r.Code), r.Error, strconv.FormatInt(callbacks, 10), r.Pod})
+		w.Write([]string{strconv.Itoa(i), strconv.FormatInt(r.Offset, 10), strconv.FormatInt(writtenAt, 10), strconv.FormatInt(r.Done, 10), strconv.Itoa(r.Code), r.Error, strconv.FormatInt(callbacks, 10), r.Pod, strconv.Itoa(r.Transport), r.Connection})
 	}
 	w.Flush()
 	if err = w.Error(); err != nil {

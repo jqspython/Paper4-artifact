@@ -1,7 +1,7 @@
-version = "v3-sys-capacity-stop-20261024"
+version = "v3-sys-capacity-round2-20261025"
 status = "NOT_FROZEN"
-design_decision_date = "2026-10-24"
-implementation = "COMPONENT_CHECK_PASSED_CAPACITY_CALIBRATION_FAILED_FALLBACK_A"
+design_decision_date = "2026-10-25"
+implementation = "STATIC_CAPACITY_AND_COMPONENT_PASS_FORMAL_BLOCKED_DYNAMIC_T1_PINNING"
 formal_runs_started = false # Freeze-time snapshot only; runtime state belongs to the append-only ledger.
 freeze_tag = "PENDING"
 
@@ -26,6 +26,10 @@ node_cpu_set = "4-15"
 pod_cpu_millicores = 250
 service_image = "paper4-v3-http:poisson-v2"
 pod_memory_mib = 128
+readiness_timeout_seconds = 2
+readiness_failure_threshold = 3
+readiness_period_seconds = 1
+readiness_initial_delay_seconds = 0
 cpu_work_pbkdf2_iterations = 6000
 kind_failed_start_attempts_before_compose = 2
 startup_jitter_fraction_before_compose = 0.30
@@ -53,11 +57,11 @@ startup_contract_seconds = 35
 startup_contract_decision = "USER_APPROVED_2026-10-22_RETAINED_D7_D9"
 
 [calibration]
-status = "NO_SELECTED_POISSON_CAPACITY_FALLBACK_A"
-capacity_rps = 0 # Inactive sentinel, NOT a measured capacity. Formal execution is blocked.
-capacity_count_per_tick = 0
+status = "ROUND2_STATIC_POISSON_PASS"
+capacity_rps = 70 # Qualified static T1 grid value; not a dynamic scaling or formal outcome.
+capacity_count_per_tick = 350
 previous_constant_grid_capacity_rps = 96
-nearest_failing_rps = 112
+previous_constant_grid_nearest_failing_rps = 112
 unloaded_probe_rps = 1
 steady_seconds = 120
 unloaded_p95_ms = 6.308091
@@ -65,7 +69,7 @@ historical_exact_slo_ms = 18.924273
 slo_ms = 18.924
 timeout_ms = 189.2
 rounding_decision = "USER_EXPLICIT_OPERATIONAL_VALUES_D3"
-interpretation = "NO_ACTIVE_CAPACITY_NOT_A_PHYSICAL_IMPOSSIBILITY_PROOF"
+interpretation = "MAXIMUM_QUALIFIED_MEASURED_GRID_VALUE_NOT_A_PHYSICAL_MAXIMUM"
 
 [poisson_recalibration]
 date = "2026-10-24"
@@ -91,6 +95,41 @@ combined_final_check_user_approved = "2026-10-24"
 budget_exhaustion = "STOP_WITHOUT_EXTRA_RUNS"
 reason = "Recalibrate under formal Poisson arrivals; v1 capacity was from constant-rate load"
 
+[poisson_round2]
+authorization_date = "2026-10-25"
+status = "PASS_11_RUNS_T1_ONLY"
+short_runs_used = 11
+first_round_runs_retained = 5
+T2_used = false
+measured_configuration_snapshot = "work/v3-sys/capacity-r2-config.toml"
+deadline_shanghai = "2026-10-26T22:00:00+08:00"
+ledger = "results/v3-sys-capacity-r2.csv"
+transport_scheme = "T1"
+independent_transports = 256
+max_connections_per_transport = 1
+assignment = "request_id_mod_256"
+preconnect_all_before_measurement = true
+log_redials = true
+grid_rps_per_pod = [40, 50, 60, 70]
+grid_pods = 4
+grid_seconds = 180
+grid_seed = 20261025
+repeat_seeds = [2026102501, 2026102502, 2026102503]
+final_seed = 2026102599
+maximum_short_runs = 12
+full_T1_runs = 11
+grid_bad_windows_maximum = 0
+maximum_failed_requests = 0
+maximum_backend_count_over_mean = 1.3
+final_seconds = 300
+final_slo_seconds = 180
+final_bad_windows_maximum = 1
+T2_only_on_T1_distribution_failure = true
+T2_maximum_attempts = 1
+T1_T2_share_total_budget = true
+third_round_allowed = false
+component_recheck = "PASS_COMPONENT_R2_20261025"
+
 [selection]
 reference = "v0.7-v2-explore"
 seed = 20261022
@@ -114,8 +153,8 @@ shakedown_failed_attempts_count = true
 
 [replay]
 go_version = "1.27.3"
-sender_source_sha256 = "87d2607d1611617e45962cbf8285bfe753717ed5c84a40351eefc6c2356fce36"
-sender_binary_sha256 = "87893572c35da0668826dab76049caa9205e64038b6a6b3f344ad980f5839996"
+sender_source_sha256 = "ce9d54bbe2505fbcf495d7ca4973a585f7c399e9fa004c3d7f96c01ffaedbf2b"
+sender_binary_sha256 = "4465fc587c033ff7ac4f8bd15e131f8ff4c8fd7fa575c73b0929148969b8512f"
 sender_source_hash_canonicalization = "utf8_universal_newlines"
 clock = "monotonic_absolute_deadlines"
 controller_input = "planned_timestamp_count_in_tick"
@@ -124,8 +163,9 @@ same_schedule_across_arms_delays_repeats = true
 schedule_hash_every_run = true
 late_missing_error_counts_separate = true
 response_paces_next_request = false
-fresh_connections = true
-implementation_status = "NEW_MAXIMUM_D10_NOT_RUN_NO_QUALIFIED_CAPACITY"
+fresh_connections = false
+transport_scheme = "T1"
+implementation_status = "T1_STATIC_PASS_DYNAMIC_CONNECTION_PINNING_OBSERVED"
 
 [metrics]
 capacity_loss = "planned_count_gt_capacity_count_per_tick_times_tick_start_ready"
@@ -242,10 +282,10 @@ startup_contract_seconds_unchanged = 35
 counts_toward_shakedown_limit = true
 
 [validation.sender_fidelity]
-status = "V1_ONLY_NEW_MAXIMUM_D10_NOT_RUN"
-observed_p99_ms = 1.125945
-observed_cpu_fraction_of_bound_cores = 0.097500915
-rate_rps = 768
+status = "ROUND2_PASS_CAL_R2_11"
+observed_p99_ms = 1.162108
+observed_cpu_fraction_of_bound_cores = 0.07776557333333332
+rate_rps = 560
 duration_seconds = 300
 lateness_origin = "actual_dispatch_minus_planned_send"
 p99_max_ms = 5.0
@@ -258,7 +298,7 @@ crosscheck_relative_difference = "abs(sender_p95_minus_k6_p95)_over_k6_p95"
 crosscheck_status = "PASS"
 observed_crosscheck_relative_difference = 0.03851424191324626
 failure_action = "use_go_or_python_multiprocess_uvloop_within_6_attempts_and_2026_10_27"
-counts_toward_shakedown_limit = true
+counts_toward_shakedown_limit = false
 
 [validation.adapter]
 status = "CONSTANT_LOAD_COMPONENT_PASSED_NO_FORMAL_COMPARISONS"
@@ -272,6 +312,18 @@ observed_runtime_ticks = 60
 actual_scale_transition_matrix = "SYNTHETIC_COMPONENT_ONLY_NOT_A_FORMAL_ENDPOINT"
 formal_matrix_status = "NOT_RUN"
 fault_matrix_status = "NOT_RUN"
+
+[validation.round2_component]
+status = "PASS"
+previous_component_is_history_only = true
+ledger = "results/v3-sys-component-r2.csv"
+real_ticks = 60
+accepted_plus_two_actions = 2
+inflight_blocked_ticks = 3
+stable_shrink_actions = 1
+monitor_flags = 0
+dynamic_connection_distribution = "ALL_44_REQUESTS_TO_INITIAL_POD_DURING_FIVE_READY_INTERVAL"
+formal_blocker = "CALIBRATED_STATIC_CAPACITY_NOT_TRANSFERABLE_TO_INITIAL_ONE_POD_T1_PATH"
 
 [archive]
 local_tick_jsonl_allowed = true
@@ -287,7 +339,9 @@ paper4_repository_private = true
 timezone = "Asia/Shanghai"
 feasibility_adapter_cutoff = "2026-10-27"
 fallback = "A_BASE_MANUSCRIPT_BY_2026_10_31_SYSTEM_FUTURE_WORK"
-formal_window = "CANCELLED_CAPACITY_CALIBRATION_DID_NOT_PASS"
+formal_window = "NOT_STARTED_DYNAMIC_TRANSPORT_SEMANTICS_NEED_USER_DECISION"
+latest_formal_start_shanghai = "2026-10-27_MORNING"
+formal_completion_cutoff_shanghai = "2026-10-30"
 combined_manuscript_review = "2026-11-06"
 extended_manuscript = "2026-11-08"
 separate_r2_review_2026_10_29 = "CANCELLED"

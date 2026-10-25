@@ -22,6 +22,13 @@ LEDGER = ROOT/"results/v3-sys-component.csv"
 LABEL = "component-v2-20261024"
 
 
+def round_two_capacity():
+    """The new component is conditional on the same qualified sender and capacity."""
+    from sysbench.calibrate import qualified_transport
+    config=tomllib.loads((ROOT/"configs/v3-sys.toml").read_text('utf-8'))
+    return qualified_transport(config,ROOT)['capacity_rps']
+
+
 def desired(tick):
     return 5 if tick == 0 or 4 <= tick < 12 else 1
 
@@ -67,6 +74,7 @@ def verify_requests(completed):
     if any((r["request_id"],r["offset_ns"])!=(str(i),str(i*1_000_000_000)) or
            (p["request_id"],p["offset_ns"])!=(str(i),str(i*1_000_000_000)) for i,(r,p) in enumerate(zip(rows,planned))):
         return False
+    if "r2" in LABEL and any(int(r.get('transport_id',-1))!=i%256 for i,r in enumerate(rows)): return False
     evidence=request_windows(rows,60)
     return evidence["written"]==300 and evidence["failed"]==0 and evidence["retried_requests"]==0 and evidence["window_counts"]==[5]*60
 
@@ -77,7 +85,8 @@ def worker():
         raise RuntimeError("Component check must be registered before real IO")
     os.sched_setaffinity(0, set(range(4,16)))
     # Forty is a synthetic test unit, not a selected physical capacity; 1 RPS is safely below it.
-    monitor = ContractMonitor(40)
+    capacity=round_two_capacity() if "r2" in LABEL else 40
+    monitor = ContractMonitor(capacity)
     controller = TickController(monitor,wrapped=True)
     runtime = PodRuntime(Kube(WORK/"kube-access.json"),LABEL,monitor)
     schedule = WORK/(LABEL+"-plan.csv")
@@ -92,7 +101,7 @@ def worker():
         stderr=(WORK/(LABEL+"-stderr.log")).open("w",encoding="utf-8")
         child=subprocess.Popen([str(WORK/"bin/replay"),"-schedule",str(schedule),"-target",
             "http://paper4-v3-sys-worker:30080/work","-out",str(WORK/(LABEL+"-requests.csv")),
-            "-duration","300"],stdout=subprocess.PIPE,stderr=stderr,text=True,
+            "-duration","300"]+(["-independent-transports","256"] if "r2" in LABEL else []),stdout=subprocess.PIPE,stderr=stderr,text=True,
             preexec_fn=lambda:os.sched_setaffinity(0,{0,2}))
         messages=queue.Queue()
         def receive():
@@ -125,7 +134,10 @@ def worker():
         result=check(ticks,runtime.events,monitor.flags,verify_requests(completed))
         result.update(http_failed=completed["failed"],schedule_sha256=fingerprint,formal_endpoint=False,
                       load="constant_1_RPS",proposal="scripted_5_at_t0_and_t4_to11_else1",
-                      unit_capacity_rps=40,physical_capacity_selected=False)
+                      unit_capacity_rps=capacity,physical_capacity_selected="r2" in LABEL)
+        if "r2" in LABEL:
+            result.update(transport_scheme="T1",sender_binary_sha256=hashlib.sha256((WORK/"bin/replay").read_bytes()).hexdigest(),
+                          config_sha256=hashlib.sha256((ROOT/"configs/v3-sys.toml").read_bytes()).hexdigest())
         (WORK/(LABEL+"-result.json")).write_text(json.dumps(result,indent=2)+"\n",encoding="utf-8")
         print(json.dumps(result),flush=True)
     except BaseException as error:
@@ -155,6 +167,7 @@ def worker():
 
 def run():
     if LEDGER.exists(): raise FileExistsError("Keep the single component attempt; do not replace it")
+    if "r2" in LABEL: round_two_capacity()
     row=dict(label=LABEL,status="RUNNING",load="constant_1_RPS",duration_seconds=300,
              plus_two_actions="",inflight_downscale_blocked_ticks="",shrink_actions="",
              five_tick_stability="",cancelled_inflight="",monitor_flags="",note="not_a_trace_or_endpoint")
@@ -166,7 +179,7 @@ def run():
         process=subprocess.run(["docker","run","--rm","--name","paper4-driver-"+LABEL,"--network","kind",
             "--label","paper4-v3-run="+LABEL,"--label","paper4-v3-slot=component-"+LABEL,
             "--cpuset-cpus","0,2,4-15","--mount",f"type=bind,source={ROOT},target=/src","--workdir","/src",
-            "--entrypoint","python",IMAGE,"-B","-m","sysbench.component","--worker"],
+            "--entrypoint","python",IMAGE,"-B","-m","sysbench.component","--worker"]+(["--round2"] if "r2" in LABEL else []),
             capture_output=True,text=True,encoding="utf-8",timeout=410)
         (WORK/(LABEL+"-host.log")).write_text(process.stdout+"\n"+process.stderr,encoding="utf-8")
         if process.returncode: raise RuntimeError("Component infrastructure failure; evidence retained")
@@ -212,5 +225,9 @@ def recheck():
 if __name__ == "__main__":
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--worker",action="store_true"); parser.add_argument("--recheck",action="store_true")
+    parser.add_argument("--round2",action="store_true")
     args=parser.parse_args()
+    if args.round2:
+        LEDGER=ROOT/"results/v3-sys-component-r2.csv"
+        LABEL="component-r2-20261025"
     recheck() if args.recheck else worker() if args.worker else run()

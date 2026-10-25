@@ -108,3 +108,11 @@ bounded recalibration status; a missing successful calibration blocks
 formal execution. D3 SLO/deadline and D1-D10 semantics are unchanged.
 Calibration and a constant-load actuator component check are engineering
 checks, separate from both the six earlier shakedowns and study endpoints.
+
+The second-round T1 sender uses 256 independent single-connection transports,
+preconnected before measurement and assigned by planned request ID modulo 256.
+Static calibration and actuator checks do not establish dynamic load sharing:
+connections established with only the initial Pod can remain pinned there
+after more Pods become Ready. The current configuration remains NOT_FROZEN
+and formal comparisons are blocked; this limitation is not silently repaired
+by changing the transport or reusing another calibration's qualification.

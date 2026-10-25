@@ -1,9 +1,13 @@
 package main
 
 import (
+	"io"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -23,5 +27,73 @@ func TestPlanAndFailedLatency(t *testing.T) {
 	}
 	if monoNS() <= 0 || cpuSeconds() < 0 {
 		t.Fatal("invalid monotonic or process CPU clock")
+	}
+}
+
+func TestIndependentTransportsPreconnectReuseAndRedial(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Connection", r.RemoteAddr)
+		w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+	var lock sync.Mutex
+	var events []map[string]any
+	clients, closeAll, err := independentClients(server.URL+"/work", 256, func(v any) {
+		lock.Lock()
+		defer lock.Unlock()
+		events = append(events, v.(map[string]any))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAll()
+	addresses := map[string]bool{}
+	perSlot := make([]string, 256)
+	for i := 0; i < 512; i++ {
+		client := clients[i%256]
+		tr := client.Transport.(*http.Transport)
+		if tr.MaxConnsPerHost != 1 || tr.MaxIdleConnsPerHost != 1 {
+			t.Fatal("not a single-connection transport")
+		}
+		resp, e := client.Get(server.URL + "/work")
+		if e != nil {
+			t.Fatal(e)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		address := resp.Header.Get("X-Connection")
+		if i < 256 {
+			perSlot[i] = address
+			addresses[address] = true
+		} else if perSlot[i%256] != address {
+			t.Fatal("connection not reused")
+		}
+	}
+	if len(addresses) != 256 {
+		t.Fatal("transports shared connections", len(addresses))
+	}
+	clients[3].CloseIdleConnections()
+	resp, e := clients[3].Get(server.URL + "/work")
+	if e != nil {
+		t.Fatal(e)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	lock.Lock()
+	defer lock.Unlock()
+	dials, redials, ready := 0, 0, false
+	for _, event := range events {
+		if event["type"] == "connection" {
+			dials++
+			if event["redial"] == true {
+				redials++
+			}
+		}
+		if event["type"] == "transport_ready" {
+			ready = event["preconnected"] == 256
+		}
+	}
+	if dials != 257 || redials != 1 || !ready {
+		t.Fatal("missing preconnect/redial evidence", dials, redials, ready)
 	}
 }

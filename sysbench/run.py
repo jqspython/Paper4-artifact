@@ -117,6 +117,7 @@ def run(args):
             "-out",str(WORK/(args.label+"-requests.csv")),"-duration",str(duration),
             "-timeout-ms",str(config["calibration"]["timeout_ms"]),"-slo-ms",str(config["calibration"]["slo_ms"])]
         if config["replay"].get("fresh_connections",False): command.append("-fresh-connections")
+        if config["replay"].get("transport_scheme") == "T1": command += ["-independent-transports","256"]
         stderr_file=(WORK/(args.label+"-sender-stderr.log")).open("w",encoding="utf-8")
         child=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=stderr_file,text=True,
             preexec_fn=lambda: os.sched_setaffinity(0,{0,2}))
@@ -135,7 +136,9 @@ def run(args):
                 runtime.poll(); events(); continue
             if event is None: break
             if isinstance(event,Exception): raise event
-            if event["type"]=="start":
+            if event["type"] in ("connection","transport_ready"):
+                save(event)
+            elif event["type"]=="start":
                 if event["schedule_sha256"]!=fingerprint: raise ValueError("Sender plan mismatch")
                 # These clocks must share the container host's monotonic epoch.
                 if not .5<(event["start_mono_ns"]/1e9-time.monotonic())<3:
@@ -147,6 +150,7 @@ def run(args):
                     start_mono=event["start_mono_ns"]/1e9,finish_mono=None,request_csv=args.label+"-requests.csv",
                     schedule_csv=str(plan.resolve().relative_to(WORK.resolve())),initial_replicas=args.initial_replicas,
                     slot_id=args.slot_id,sender_binary_sha256=hashlib.sha256((WORK/"bin/replay").read_bytes()).hexdigest())
+                meta['transport_scheme']=config['replay'].get('transport_scheme','legacy')
                 save(meta)
             elif event["type"]=="boundary":
                 if meta is None: raise ValueError("Missing sender clock barrier")

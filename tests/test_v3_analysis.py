@@ -3,7 +3,7 @@ import copy
 import hashlib
 import unittest
 
-from sysbench.analyze import analyze_matrix, analyze_run, monitor_evidence, request_windows
+from sysbench.analyze import analyze_matrix, analyze_run, monitor_evidence, request_windows, verify_t1
 from sysbench.control import ContractMonitor, TickController
 
 
@@ -41,6 +41,37 @@ def fixture(counts=(1, 1), *, arm="HPA-wrapped", intervals=None, request_errors=
 
 
 class RealLogAnalysis(unittest.TestCase):
+    def test_t1_events_require_256_preconnections_and_actual_round_robin(self):
+        records,requests=fixture()
+        records[0]['transport_scheme']='T1'
+        connections=[dict(type='connection',transport_id=i,dial_attempt=1,redial=False,success=True,
+                          local_address='local:'+str(i),observed_mono_ns=99_000_000_000) for i in range(256)]
+        ready=dict(type='transport_ready',scheme='T1',preconnected=256,independent_transports=256,
+                   max_connections_per_transport=1,assignment='request_id_mod_256')
+        records[-1:-1]=connections+[ready]
+        for i,r in enumerate(requests): r.update(transport_id=str(i%256),connection='local:'+str(i%256))
+        self.assertEqual(analyze_run(records,expected_ticks=2,request_rows=requests)['ticks'],2)
+        damaged=copy.deepcopy(records)
+        for r in damaged:
+            if r['type']=='connection': r['local_address']='shared'
+        with self.assertRaisesRegex(ValueError,'initial'): verify_t1(damaged,records[0],requests)
+        with self.assertRaisesRegex(ValueError,'Duplicate'):
+            verify_t1(records+[connections[0]],records[0],requests)
+        redial=dict(connections[0],dial_attempt=2,redial=True,local_address='later',observed_mono_ns=100_000_500_000)
+        requests[0]['connection']='later'
+        with self.assertRaisesRegex(ValueError,'after request write'):
+            verify_t1(records+[redial],records[0],requests)
+        # A retry's last GotConn can follow its first successful write; it must precede completion.
+        requests[0]['write_callbacks']='2'
+        verify_t1(records+[redial],records[0],requests)
+        redial['observed_mono_ns']=100_002_000_000
+        with self.assertRaisesRegex(ValueError,'retry'): verify_t1(records+[redial],records[0],requests)
+        requests[0].update(connection='local:0',write_callbacks='1')
+        requests[1]['transport_id']='0'
+        with self.assertRaisesRegex(ValueError,'assignment'): analyze_run(records,expected_ticks=2,request_rows=requests)
+        requests[1]['transport_id']='1'; connections[7]['observed_mono_ns']=101_000_000_000
+        with self.assertRaisesRegex(ValueError,'initial'): analyze_run(records,expected_ticks=2,request_rows=requests)
+
     def test_d3_rebuild_infinite_failures_empty_windows_and_creation_billing(self):
         records, requests = fixture((1, 0, 1), request_errors=(2,))
         result = analyze_run(records, expected_ticks=3, request_rows=requests)

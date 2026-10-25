@@ -89,6 +89,9 @@ def json_command(command):
 
 
 def preflight(root,config):
+    if config['replay'].get('transport_scheme')=='T1':
+        from sysbench.calibrate import qualified_transport
+        qualified_transport(config,root)
     deployment=json_command(kubectl(config,root)+["get","deployment","cpu-http","-o","json"])
     if deployment["spec"].get("replicas",1)!=0 or any(
             deployment.get("status",{}).get(k,0)!=0 for k in ("replicas","readyReplicas","availableReplicas")):
@@ -135,6 +138,8 @@ def verify_result(log,slot,plan,config):
         raise ValueError("Run/plan/original-content schedule hashes differ")
     if meta.get("sender_binary_sha256")!=config["replay"]["sender_binary_sha256"]:
         raise ValueError("Actual sender binary differs from the frozen tested binary")
+    if meta.get('transport_scheme','legacy')!=config['replay'].get('transport_scheme','legacy'):
+        raise ValueError("Actual transport differs from the calibrated frozen scheme")
     if plan_meta.get("capacity_rps") != config["calibration"]["capacity_rps"]:
         raise ValueError("Plan uses a different capacity calibration")
     result=analyze(log,capacity_rps=config["calibration"]["capacity_rps"],expected_ticks=240)

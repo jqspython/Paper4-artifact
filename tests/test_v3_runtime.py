@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import patch
 
 from sysbench.control import ContractMonitor
-from sysbench.runtime import PodRuntime, cost_between
+from sysbench.runtime import PodRuntime, cost_between, pod
 
 
 class API:
@@ -22,6 +22,11 @@ class API:
 
 
 class RuntimeProperties(unittest.TestCase):
+    def test_round_two_probe_keeps_period_and_initial_delay(self):
+        probe=pod("test","test",5)["spec"]["containers"][0]["readinessProbe"]
+        self.assertEqual((probe["timeoutSeconds"],probe["failureThreshold"],probe["periodSeconds"],
+                          probe.get("initialDelaySeconds",0)),(2,3,1,0))
+
     def test_uncertain_post_is_cleaned_by_owned_name_without_claiming_valid_billing(self):
         class UncertainAPI(API):
             def call(self,method,resource,body=None):

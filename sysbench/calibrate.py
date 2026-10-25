@@ -26,9 +26,61 @@ LEDGER = ROOT / "results/v3-sys-capacity.csv"
 DECISION = WORK / "capacity-v2-decision.json"
 IMAGE = "python:3.11-slim-bookworm@sha256:0a310eeecf4e1f5a0743f9a6520c90c88d089c903ca5fd283f501e3a805f5f89"
 GRID = (40, 50, 60, 70, 80)
+ROUND = 1
 FIELDS = ("number", "label", "purpose", "pods", "per_pod_rps", "seconds", "seed", "fresh_connections",
           "started_utc", "status", "slo_bad_windows", "slo_windows", "prefix_failed", "failed", "backend_max_over_mean",
           "missing_backend", "late_p99_ms", "sender_cpu_fraction", "slo_pass", "fidelity_pass", "note")
+
+
+def round_two():
+    """Separate evidence namespace; never reopen round one's terminal decision."""
+    global ROUND, LEDGER, DECISION, GRID, FIELDS
+    ROUND = 2
+    LEDGER = ROOT/"results/v3-sys-capacity-r2.csv"
+    DECISION = WORK/"capacity-r2-decision.json"
+    GRID = (40,50,60,70)
+    FIELDS = tuple(k for k in FIELDS if k not in {"transport_scheme","probe","config_sha256"}) + (
+        "transport_scheme","probe","config_sha256")
+
+
+def qualified_transport(config, root=ROOT):
+    """Bind later use to the sender actually measured, not merely to today's config."""
+    root=Path(root); work=root/'work/v3-sys'
+    snapshot=(work/'capacity-r2-config.toml').read_bytes()
+    snapshot_id=hashlib.sha256(snapshot).hexdigest()
+    original=tomllib.loads(snapshot.decode('utf-8'))
+    decision=json.loads((work/'capacity-r2-decision.json').read_text('utf-8'))
+    selected=decision.get('selected_capacity')
+    if decision['status']!='PASS' or selected!=config['calibration']['capacity_rps'] or config['calibration']['capacity_count_per_tick']!=5*selected:
+        raise ValueError('Qualified calibration capacity is missing or differs')
+    for section in ('platform','controller','metrics'):
+        if config[section]!=original[section]: raise ValueError('Measured configuration changed: '+section)
+    for key in ('slo_ms','timeout_ms'):
+        if config['calibration'][key]!=original['calibration'][key]: raise ValueError('Measured SLO changed')
+    for key in ('transport_scheme','fresh_connections','sender_source_sha256','sender_binary_sha256'):
+        if config['replay'][key]!=original['replay'][key]: raise ValueError('Qualified transport identity changed: '+key)
+    if config['replay']['transport_scheme']!='T1' or config['replay']['fresh_connections']:
+        raise ValueError('This calibration provenance supports T1 only')
+    for key,path,text in [('sender_source_sha256',root/'sysbench/replay.go',True),
+                          ('sender_binary_sha256',work/'bin/replay',False)]:
+        raw=path.read_text('utf-8').encode() if text else path.read_bytes()
+        if hashlib.sha256(raw).hexdigest()!=original['replay'][key]: raise ValueError('Measured sender file changed: '+key)
+    with (root/'results/v3-sys-capacity-r2.csv').open(encoding='utf-8') as stream: rows=list(csv.DictReader(stream))
+    if len(rows)!=decision['short_runs_used'] or not 11<=len(rows)<=12:
+        raise ValueError('Qualified calibration ledger is incomplete')
+    for row in rows:
+        if row['status']!='MEASURED' or row['config_sha256']!=snapshot_id or row['transport_scheme']!='T1':
+            raise ValueError('Calibration registration differs from retained configuration')
+        events=[json.loads(s) for s in (work/(row['label']+'-events.jsonl')).read_text('utf-8').splitlines()]
+        driver,=[e for e in events if e['type']=='calibration_driver']
+        complete,=[e for e in events if e['type']=='complete']
+        if driver['sender_binary_sha256']!=original['replay']['sender_binary_sha256'] or driver['schedule_sha256']!=complete['schedule_sha256']:
+            raise ValueError('Actual calibration sender/plan differs from provenance')
+        if any(str(driver['parameters'][k])!=str(row[k]) for k in
+               ('label','pods','per_pod_rps','seconds','seed','transport_scheme','config_sha256')):
+            raise ValueError('Driver receipt differs from prior registration')
+    return dict(config_sha256=snapshot_id,source_sha256=original['replay']['sender_source_sha256'],
+                binary_sha256=original['replay']['sender_binary_sha256'],capacity_rps=selected,transport_scheme='T1')
 
 
 def ledger():
@@ -50,9 +102,15 @@ def register(purpose, pods, rate, seconds, seed, fresh):
         raise RuntimeError("Calibration budget exhausted or unfinished attempt; never reset the ledger")
     n = len(rows)+1
     row = dict.fromkeys(FIELDS, "")
-    row.update(number=n, label=f"cal-v2-{n:02d}", purpose=purpose, pods=pods, per_pod_rps=rate,
+    row.update(number=n, label=f"cal-{'r2' if ROUND==2 else 'v2'}-{n:02d}", purpose=purpose, pods=pods, per_pod_rps=rate,
                seconds=seconds, seed=seed, fresh_connections=int(fresh), status="RUNNING",
                started_utc=datetime.now(timezone.utc).isoformat())
+    if ROUND == 2:
+        if datetime.now(timezone.utc) >= datetime(2026,10,26,14,tzinfo=timezone.utc):
+            raise RuntimeError("Round-two deadline reached; no further calibration")
+        if fresh: raise ValueError("Round two never uses per-request fresh connections")
+        row.update(transport_scheme="T1",probe="timeout2_failure3_period1_initial0",
+                   config_sha256=hashlib.sha256((ROOT/"configs/v3-sys.toml").read_bytes()).hexdigest())
     write_rows([*rows, row])
     return row
 
@@ -87,6 +145,10 @@ def evaluate(rows, pods, seconds, *, combined=False, cpu_fraction=None):
     p99 = late[math.ceil(.99*len(late))-1] if late else math.inf
     fidelity = (len(late) == len(rows) and windows["retried_requests"] == 0
                 and p99 <= 1.8924 and cpu_fraction is not None and cpu_fraction < .30)
+    if ROUND == 2:
+        slo_pass = (nonempty>0 and (bad/nonempty<=1/36 if combined else bad==0)
+                    and windows["failed"]==0 and missing_backend==0 and ratio<=1.3
+                    and windows["retried_requests"]==0)
     return dict(slo_bad_windows=bad, slo_windows=nonempty, prefix_failed=slo_requests["failed"],failed=windows["failed"],
                 backend_max_over_mean=ratio if math.isfinite(ratio) else "INF", missing_backend=missing_backend,
                 late_p99_ms=p99 if math.isfinite(p99) else "INF",
@@ -105,6 +167,9 @@ def worker(row):
     if check["status"] != "RUNNING" or any(str(check[k]) != str(row[k]) for k in
             ("label", "pods", "per_pod_rps", "seconds", "seed", "fresh_connections")):
         raise ValueError("Static calibration must be registered before real IO")
+    if ROUND == 2 and (row.get("transport_scheme")!="T1" or row["config_sha256"]!=
+            hashlib.sha256((ROOT/"configs/v3-sys.toml").read_bytes()).hexdigest()):
+        raise ValueError("Round-two registered transport/configuration changed before real IO")
     os.sched_setaffinity(0, set(range(4, 16)))
     runtime = PodRuntime(Kube(WORK/"kube-access.json"), label, ContractMonitor(rate))
     schedule = WORK/(label+"-plan.csv")
@@ -125,11 +190,12 @@ def worker(row):
                "http://paper4-v3-sys-worker:30080/work", "-out", str(WORK/(label+"-requests.csv")),
                "-duration", str(seconds), "-timeout-ms", "189.2", "-slo-ms", "18.924"]
         if fresh: cmd.append("-fresh-connections")
+        if row.get("transport_scheme") == "T1": cmd += ["-independent-transports","256"]
         output = (WORK/(label+"-events.jsonl")).open("w", encoding="utf-8")
         errors = (WORK/(label+"-sender-stderr.log")).open("w", encoding="utf-8")
         child = subprocess.Popen(cmd, stdout=output, stderr=errors,
                                  preexec_fn=lambda: os.sched_setaffinity(0, {0, 2}))
-        until = time.monotonic()+seconds+35
+        until = time.monotonic()+seconds+60
         while child.poll() is None:
             if time.monotonic() > until: raise TimeoutError("Calibration sender watchdog")
             runtime.poll(); time.sleep(.25)
@@ -169,6 +235,7 @@ def point(purpose, rate, *, n=4, seconds=180, seed=20261024, fresh=False):
            "--cpuset-cpus", "0,2,4-15", "--mount", f"type=bind,source={ROOT},target=/src",
            "--workdir", "/src", "--entrypoint", "python", IMAGE, "-B", "-m", "sysbench.calibrate",
            "--worker", "--number", str(row["number"])]
+    if ROUND == 2: cmd.append("--round2")
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=seconds+120)
         (WORK/(label+"-host.log")).write_text(result.stdout+"\nSTDERR\n"+result.stderr, encoding="utf-8")
@@ -188,6 +255,11 @@ def point(purpose, rate, *, n=4, seconds=180, seed=20261024, fresh=False):
             raise ValueError("Sender CPU normalization differs from bound two cores")
         score = evaluate(raw, driver["created_pods"], seconds, combined=purpose == "eight_pod_fidelity",
                          cpu_fraction=cpu_fraction)
+        if ROUND == 2:
+            starts=[e for e in events if e["type"]=="transport_ready"]
+            if len(starts)!=1 or starts[0].get("preconnected")!=256 or any(
+                    int(r.get("transport_id",-1))!=i%256 for i,r in enumerate(raw)):
+                raise ValueError("T1 preconnect/request assignment evidence mismatch")
         values = {k: v for k, v in score.items() if k in FIELDS}
         values.update(status="MEASURED", note="exact_D3_nearest_rank; failed_points_retained")
     except BaseException as error:
@@ -244,6 +316,55 @@ def run_all():
     print("CALIBRATION_DECISION "+json.dumps(decision), flush=True)
 
 
+def run_round_two():
+    if ROUND!=2 or ledger() or DECISION.exists():
+        raise RuntimeError("Round two is a single new sequence; never reset evidence")
+    decision=dict(status="FAILED_NO_GRID_CAPACITY",selected_capacity=None,transport_scheme="T1")
+    class DistributionFailure(Exception): pass
+    def measured(purpose,rate,**options):
+        score=point(purpose,rate,**options)
+        if score["missing_backend"]==0 and float(score["backend_max_over_mean"])>1.3:
+            decision.update(status="T2_REQUIRED_DISTRIBUTION_FAILURE",trigger_rate=rate)
+            raise DistributionFailure()
+        return score
+    try:
+        grid={}
+        for rate in GRID:
+            score=measured("grid",rate,seed=20261025)
+            grid[rate]=score
+        passing=[r for r in GRID if grid[r]["slo_pass"]]
+        if passing:
+            best=max(passing); lower=best-10
+            groups={best:[],lower:[]}
+            for rate in (best,lower):
+                for i in range(3): groups[rate].append(measured("repeat",rate,seed=2026102501+i))
+            valid=[r for r in (best,lower) if r in GRID and grid[r]["slo_pass"] and all(s["slo_pass"] for s in groups[r])]
+            decision.update(status="FAILED_REPEATED_CAPACITY",candidates=[best,lower])
+            if valid:
+                selected=max(valid)
+                score=measured("eight_pod_fidelity",selected,n=8,seconds=300,seed=2026102599)
+                passed=score["slo_pass"] and score["fidelity_pass"]
+                decision.update(status="PASS" if passed else "FAILED_FINAL",selected_capacity=selected if passed else None)
+    except DistributionFailure: pass
+    except BaseException as error:
+        decision.update(status="FAILED_INFRASTRUCTURE",error=type(error).__name__+": "+str(error))
+    decision.update(round=2,short_runs_used=len(ledger()),short_run_limit=12,first_round_runs=5,
+                    formal_runs_started=False,physical_impossibility_proven=False,
+                    reason="User_authorized_independent_connection_round_robin_and_probe_change")
+    if decision["status"]=="T2_REQUIRED_DISTRIBUTION_FAILURE" and len(ledger())+11>12:
+        decision.update(status="FAILED_DISTRIBUTION_NO_COMPLETE_T2_BUDGET",minimum_total_with_T2=len(ledger())+11)
+    if decision["status"]=="T2_REQUIRED_DISTRIBUTION_FAILURE":
+        # Nonterminal handoff, not a fresh budget. T2 may be implemented once if the full path fits.
+        target=WORK/"capacity-r2-t1-handoff.json"
+        decision["minimum_total_with_T2"]=len(ledger())+11
+    else:
+        target=DECISION
+        decision["next_stage"]="COMPONENT_RECHECK" if decision["status"]=="PASS" else "FINAL_FALLBACK_A"
+    if target.exists(): raise FileExistsError("Preserve prior round-two decision")
+    target.write_text(json.dumps(decision,indent=2)+"\n",encoding="utf-8")
+    print("CALIBRATION_DECISION "+json.dumps(decision),flush=True)
+
+
 def finalize_stopped():
     """Close a failed five-point screen after an interrupted static run; no IO to the cluster."""
     rows=ledger()
@@ -273,10 +394,12 @@ if __name__ == "__main__":
     p.add_argument("--worker", action="store_true"); p.add_argument("--number", type=int)
     p.add_argument("--run-all", action="store_true")
     p.add_argument("--finalize-stopped",action="store_true")
+    p.add_argument("--round2",action="store_true")
     args = p.parse_args()
+    if args.round2: round_two()
     if args.worker:
         if args.number is None: p.error("Worker needs a registered number")
         worker(ledger()[args.number-1])
-    elif args.run_all: run_all()
+    elif args.run_all: run_round_two() if args.round2 else run_all()
     elif args.finalize_stopped: finalize_stopped()
     else: p.error("Choose --run-all or a registered Linux worker")

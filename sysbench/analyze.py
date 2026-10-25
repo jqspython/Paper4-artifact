@@ -349,16 +349,62 @@ def monitor_evidence(truths, flags, boundaries):
                 premature_latch=delay_seconds is not None and delay_seconds < 0)
 
 
+def verify_t1(records, meta, request_rows):
+    """Transport evidence is checked separately from scientific outcome arithmetic."""
+    extras=[r for r in records if r['type'] in {'connection','transport_ready'}]
+    if meta.get('transport_scheme')!='T1':
+        if extras: raise ValueError("Transport evidence has no matching T1 metadata")
+        return
+    ready=[r for r in extras if r['type']=='transport_ready']
+    if len(ready)!=1 or any(ready[0].get(k)!=v for k,v in (
+            ('scheme','T1'),('preconnected',256),('independent_transports',256),
+            ('max_connections_per_transport',1),('assignment','request_id_mod_256'))):
+        raise ValueError("T1 preconnection receipt incomplete")
+    connections=[r for r in extras if r['type']=='connection']
+    initial={}; known={}; attempts={i:{} for i in range(256)}
+    for r in connections:
+        slot=count(r['transport_id'],'transport id')
+        if slot>=256: raise ValueError("T1 transport id outside range")
+        attempt=count(r['dial_attempt'],'dial attempt')
+        if attempt<1 or r['redial']!=(attempt>1): raise ValueError("T1 redial counter mismatch")
+        when=number(r['observed_mono_ns'],'dial clock')
+        if attempt in attempts[slot]: raise ValueError("Duplicate T1 dial attempt")
+        attempts[slot][attempt]=when
+        if r['success']:
+            key=(slot,r['local_address'])
+            known[key]=min(known.get(key,when),when)
+            if attempt==1 and when<meta['start_mono']*1e9: initial[slot]=r['local_address']
+    if set(initial)!=set(range(256)) or len(set(initial.values()))!=256 or request_rows is None:
+        raise ValueError("T1 lacks all initial connections or actual request evidence")
+    for events in attempts.values():
+        if sorted(events)!=list(range(1,len(events)+1)) or [events[i] for i in sorted(events)]!=sorted(events.values()):
+            raise ValueError("T1 dial attempts are not continuous chronological evidence")
+    for i,r in enumerate(request_rows):
+        slot=int(r.get('transport_id',-1))
+        written=int(r['written_ns']); key=(slot,r.get('connection'))
+        if slot!=i%256 or written>=0 and key not in known:
+            raise ValueError("T1 request assignment/connection differs from dial evidence")
+        if written>=0:
+            # CSV stores first successful write and last GotConn. Retries can refer to different connections.
+            deadline=meta['start_mono']*1e9+written
+            if int(r['write_callbacks'])<=1:
+                if known[key]>deadline: raise ValueError("T1 dial happened after request write")
+            elif (not any(s==slot and t<=deadline for (s,_),t in known.items()) or
+                  known[key]>meta['start_mono']*1e9+int(r['completed_ns'])):
+                raise ValueError("T1 retry lacks earlier write/last-connection evidence")
+
+
 def analyze_run(records, *, expected_ticks=240, request_rows=None, schedule_bytes=None):
     for record in records:
         finite_record(record)
-        if record.get("type") not in {"meta", "tick", "pod_event", "complete"}:
+        if record.get("type") not in {"meta", "tick", "pod_event", "complete", "connection", "transport_ready"}:
             raise ValueError("Unknown real-log record type")
     metas = [r for r in records if r["type"] == "meta"]
     completes = [r for r in records if r["type"] == "complete"]
     if len(metas) != 1 or len(completes) != 1 or records[-1]["type"] != "complete":
         raise ValueError("One meta and one final complete record are required")
     meta, complete = metas[0], completes[0]
+    verify_t1(records,meta,request_rows)
     for key in ("run_id", "source", "app"):
         if not isinstance(meta[key], str) or not meta[key]:
             raise ValueError("Explicit string run/source/app identity required")
