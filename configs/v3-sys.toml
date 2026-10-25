@@ -1,9 +1,11 @@
-version = "v3-sys-design-v2"
+version = "v3-sys-execution-v1"
 status = "FROZEN"
 design_decision_date = "2026-10-25"
 implementation = "T1_CAPACITY_FIDELITY_COMPONENT_PASS_FORMAL_NOT_RUN"
 formal_runs_started = false # Freeze-time snapshot only; runtime state belongs to the append-only ledger.
-freeze_tag = "v3-sys-design-v2"
+freeze_tag = "v3-sys-execution-v1"
+parent_design_tag = "v3-sys-design-v2"
+maintenance_revision = "PRE_FORMAL_READ_ONLY_CLASSIFICATION_MEASURED_CLEANUP_ONLY"
 freeze_reason = "Round1 fresh connections caused failures; round2 uses independent connection rotation and a bounded Ready-change idle-refresh repair"
 
 [observed_environment]
@@ -360,7 +362,7 @@ paper4_repository_private = true
 timezone = "Asia/Shanghai"
 feasibility_adapter_cutoff = "2026-10-27"
 fallback = "A_BASE_MANUSCRIPT_BY_2026_10_31_SYSTEM_FUTURE_WORK"
-formal_window = "NOT_STARTED_HOST_PENDING_REBOOT_AND_PROTECTED_MAINTENANCE_REQUIRED"
+formal_window = "PRE_FORMAL_MAINTENANCE_RECHECK_PASSED_2026_10_25"
 latest_formal_start_shanghai = "2026-10-27_MORNING"
 formal_completion_cutoff_shanghai = "2026-10-30"
 combined_manuscript_review = "2026-11-06"

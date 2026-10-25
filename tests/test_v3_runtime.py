@@ -2,12 +2,90 @@
 import unittest
 import io
 import json
+import hashlib
+from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from sysbench.control import ContractMonitor
 from sysbench.runtime import PodRuntime, cost_between, pod
 from sysbench.run import refresh_t1, ready_ids
+from sysbench.execute import reviewed_pending_operations, maintenance
+from sysbench import execute
+
+
+class MaintenanceClassification(unittest.TestCase):
+    """Pure fixtures for the changed host gate; no real registry or driver mutations."""
+    def setUp(self):
+        self.temporary=tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1]/'work')
+        self.addCleanup(self.temporary.cleanup)
+        self.base=Path(self.temporary.name); self.temp=self.base/'Temp'; self.temp.mkdir()
+        self.windows=self.base/'Windows'
+        self.drivers=self.windows/'System32'/'drivers'; self.drivers.mkdir(parents=True)
+        self.name='TAOAcceleratorEx64_ev.sys'; self.data=b'artificial cleanup identity'
+        self.installed=self.drivers/self.name; self.installed.write_bytes(self.data)
+        self.source=self.temp/(self.name+'25-14-52'); self.source.write_bytes(self.data)
+        self.expected=hashlib.sha256(self.data).hexdigest()
+        self.target=self.windows/'System32'/'spool'/'drivers'/'x64'/'3'/'MXDWDRV.DLL'
+        self.target.parent.mkdir(parents=True); self.target.write_bytes(b'fake installed printer')
+        self.missing=self.target.parent/'New'/self.target.name
+        self.queue=[self.nt(self.source),'',self.nt(self.missing),self.nt(self.target)]
+        self.hashes=patch.dict(execute.REVIEWED_CLEANUP,{self.name:self.expected},clear=True)
+        self.hashes.start(); self.addCleanup(self.hashes.stop)
+
+    @staticmethod
+    def nt(path): return '*1\\??\\'+str(path)
+
+    def classify(self,queue):
+        return reviewed_pending_operations(queue,temp_root=self.temp,windows_root=self.windows)
+
+    def test_exact_reviewed_cleanup_and_no_source_residue_are_read_only(self):
+        notes=self.classify(self.queue)
+        self.assertEqual(len(notes),2)
+        self.assertEqual(self.source.read_bytes(),self.data)
+        self.assertEqual(self.installed.read_bytes(),self.data)
+        self.assertFalse(self.missing.exists())
+        self.assertEqual(self.queue[1],'')
+        self.assertEqual(self.classify([]),[])
+
+    def test_unknown_path_live_replacement_or_changed_hash_remains_blocked(self):
+        bad=[self.queue[:-1],[self.nt(self.temp/'other.sys'),''],
+             [self.nt(self.source),self.nt(self.installed)],
+             [self.nt(self.missing),self.nt(self.temp/self.target.name)]]
+        for queue in bad:
+            with self.subTest(queue=queue),self.assertRaises(RuntimeError): self.classify(queue)
+        self.source.write_bytes(b'changed')
+        with self.assertRaises(RuntimeError): self.classify(self.queue)
+        self.source.write_bytes(self.data); self.installed.write_bytes(b'changed installed')
+        with self.assertRaises(RuntimeError): self.classify(self.queue)
+        self.installed.write_bytes(self.data)
+        self.missing.parent.mkdir(); self.missing.write_bytes(b'replacement still pending')
+        with self.assertRaises(RuntimeError): self.classify(self.queue)
+
+    def test_windows_update_pending_or_unprotected_window_remains_blocked(self):
+        import sys
+        from contextlib import nullcontext
+        from datetime import datetime,timedelta,timezone
+        def opened(hive,key):
+            if key.endswith('RebootPending') or key.endswith('RebootRequired'): raise FileNotFoundError
+            return nullcontext(key)
+        expires=(datetime.now(timezone.utc)+timedelta(days=7)).isoformat()
+        fake=SimpleNamespace(HKEY_LOCAL_MACHINE=0,OpenKey=opened,
+            QueryValueEx=lambda key,name:(self.queue if name=='PendingFileRenameOperations' else expires,0))
+        with patch.dict(sys.modules,{'winreg':fake}),patch.object(execute.os,'name','nt'),\
+                patch.object(execute,'update_reboot_required',return_value=False) as update,\
+                patch.object(execute,'reviewed_pending_operations',return_value=['synthetic reviewed cleanup']) as review:
+            result=maintenance(True)
+            self.assertEqual(result['reviewed_delayed_operations'],['synthetic reviewed cleanup'])
+            self.assertFalse(result['registry_or_services_changed']); review.assert_called_once_with(self.queue)
+            update.return_value=True
+            with self.assertRaises(RuntimeError): maintenance(True)
+            update.return_value=False; expires=(datetime.now(timezone.utc)-timedelta(days=1)).isoformat()
+            with self.assertRaises(RuntimeError): maintenance(True)
+            expires=(datetime.now(timezone.utc)+timedelta(days=7)).isoformat()
+            fake.OpenKey=lambda *args: nullcontext('pending')
+            with self.assertRaises(RuntimeError): maintenance(True)
 
 
 class API:

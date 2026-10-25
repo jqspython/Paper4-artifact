@@ -118,5 +118,7 @@ The final twelfth calibration checked the repaired sender at the unchanged c=70,
 and one synthetic scaling regression exercised redistribution and actuator paths.
 Both rounds contain 17 calibration attempts in total; earlier failures are retained locally.
 These checks are not formal controller comparisons or proof of production SLO performance.
-All 78 formal slots remain NOT_RUN. A host pending reboot or unprotected maintenance
-window prevents launch even after design freeze; the maintenance guard is unchanged.
+All 78 formal slots are NOT_RUN at this execution-freeze export.
+The host guard retains update-reboot checks and records narrowly reviewed delayed cleanup
+without editing the OS queue. Unknown operations or changed identities still block;
+Windows Update Agent and a measured update-pause window are also checked before launch.

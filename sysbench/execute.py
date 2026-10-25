@@ -2,18 +2,21 @@
 
 An operator must declare a protected maintenance window with --maintenance-ready.
 This is an operator declaration, not a claim that Windows Update was disabled.
-Windows pending-reboot indicators hard-block launch. Sleep inhibition is local
+Windows update/reboot indicators hard-block launch. Reviewed delayed cleanup
+is recorded without altering the OS queue; unknown operations still block. Sleep inhibition is local
 to this process lifetime and is released in finally; no OS policy is changed.
 """
 import argparse
 from contextlib import contextmanager
 import ctypes
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 import traceback
 
 from sysbench import matrix
@@ -24,6 +27,60 @@ ROOT=Path(__file__).resolve().parents[1]
 IMAGE="python:3.11-slim-bookworm@sha256:0a310eeecf4e1f5a0743f9a6520c90c88d089c903ca5fd283f501e3a805f5f89"
 ARM_CLI={"HPA-locked":"hpa", "HPA-wrapped":"wrapped-hpa", "HPA-conservative":"conservative-hpa"}
 WATCHDOG_SECONDS=1320
+REVIEWED_CLEANUP = {
+    "TAOAcceleratorEx64_ev.sys": "9028c1827fb23331ee5fea7ab165f9deeccaeebe15ddd2f059df65b864ac31b4",
+    "TAOKernelEx64_ev.sys": "6fe34d46b4eba047cc8795bf97769be2c08a7a9e340a7505d2efe1be407f10e7",
+}
+
+
+def reviewed_pending_operations(operations, *, temp_root=None, windows_root=None):
+    """Read-only classification of the measured cleanup identities; no generic exemptions."""
+    if not isinstance(operations,list) or len(operations)%2 or any(not isinstance(s,str) for s in operations):
+        raise RuntimeError("PENDING_REBOOT: malformed pending-file queue")
+    temp_root=Path(temp_root if temp_root is not None else tempfile.gettempdir())
+    windows_root=Path(windows_root if windows_root is not None else os.environ["SystemRoot"])
+    def path(value):
+        for prefix in ("*1\\??\\", "\\??\\"):
+            if value.startswith(prefix):
+                result=Path(value[len(prefix):])
+                if result.is_absolute() and ".." not in result.parts: return result
+        raise RuntimeError("PENDING_REBOOT: unreviewed file-operation path")
+    notes=[]
+    for source_text,target_text in zip(operations[::2],operations[1::2]):
+        source=path(source_text)
+        if not target_text and source.parent==temp_root:
+            for name,expected in REVIEWED_CLEANUP.items():
+                installed=windows_root/"System32"/"drivers"/name
+                if (re.fullmatch(re.escape(name)+r"\d{2}-\d{2}-\d{2}",source.name,re.I)
+                        and source.is_file() and installed.is_file()
+                        and digest(source)==expected and digest(installed)==expected):
+                    notes.append("reviewed_identical_driver_temp_cleanup:"+name)
+                    break
+            else: raise RuntimeError("PENDING_REBOOT: unknown or changed temporary driver cleanup")
+            continue
+        if target_text:
+            target=path(target_text)
+            for architecture,names in (("x64",{"mxdwdrv.dll","pjlmon.dll","ps5ui.dll","pscript5.dll",
+                    "unidrv.dll","unidrvui.dll","unires.dll","printconfig.dll"}),
+                    ("W32X86",{"mxdwdrv.dll","printconfig.dll"})):
+                directory=windows_root/"System32"/"spool"/"drivers"/architecture/"3"
+                if (source.parent==directory/"New" and source.name.casefold() in names
+                        and target==directory/source.name and not source.exists() and target.is_file()):
+                    notes.append("reviewed_source_absent_print_residue:"+architecture+"/"+source.name)
+                    break
+            else: raise RuntimeError("PENDING_REBOOT: unknown or live file replacement")
+            continue
+        raise RuntimeError("PENDING_REBOOT: unreviewed delayed operation")
+    return notes
+
+
+def update_reboot_required():
+    command="(New-Object -ComObject Microsoft.Update.SystemInfo).RebootRequired | ConvertTo-Json -Compress"
+    result=subprocess.run(["powershell.exe","-NoProfile","-NonInteractive","-Command",command],
+        capture_output=True,text=True,check=True,timeout=20,**windows_options())
+    value=json.loads(result.stdout)
+    if not isinstance(value,bool): raise RuntimeError("Cannot verify Windows Update reboot state")
+    return value
 
 
 def maintenance(ready):
@@ -38,13 +95,24 @@ def maintenance(ready):
                     raise RuntimeError("PENDING_REBOOT: resolve maintenance before formal execution")
             except FileNotFoundError:
                 pass
+        if update_reboot_required():
+            raise RuntimeError("PENDING_REBOOT: Windows Update Agent requires restart")
+        notes=[]
         try:
             with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,r"SYSTEM\CurrentControlSet\Control\Session Manager") as key:
                 pending,_=winreg.QueryValueEx(key,"PendingFileRenameOperations")
-                if pending: raise RuntimeError("PENDING_REBOOT: pending file operations block formal execution")
+                if pending: notes=reviewed_pending_operations(pending)
         except FileNotFoundError:
             pass
-    return "OPERATOR_DECLARED_MAINTENANCE_READY; NO_PENDING_REBOOT_DETECTED; UPDATE_POLICY_UNCHANGED"
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,r"SOFTWARE\Microsoft\WindowsUpdate\UX\Settings") as key:
+            expiries=[datetime.fromisoformat(winreg.QueryValueEx(key,name)[0].replace("Z","+00:00"))
+                      for name in ("PauseUpdatesExpiryTime","PauseQualityUpdatesEndTime")]
+        if any(date.tzinfo is None for date in expiries) or min(expiries)<datetime.now(timezone.utc)+timedelta(hours=30):
+            raise RuntimeError("MAINTENANCE_REQUIRED: verified update pause must protect the next 30 hours")
+        return dict(status="OPERATOR_READY_UPDATE_REBOOT_CLEAR_REVIEWED_QUEUE_RETAINED",
+                    reviewed_delayed_operations=notes,update_pause_until=min(expiries).isoformat(),
+                    registry_or_services_changed=False)
+    return "OPERATOR_DECLARED_MAINTENANCE_READY; NON_WINDOWS_HOST"
 
 
 @contextmanager
