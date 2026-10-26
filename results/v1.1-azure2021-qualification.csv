@@ -1,0 +1,8 @@
+metric,value
+status,NOT_ASSESSABLE_INSUFFICIENT_ELIGIBLE_APPS
+producer_design_ref,83cbb695c8cfe622eb7e644523e5012b4dc4e999
+eligible_apps,38
+required_apps,80
+replacement_or_relaxation,PROHIBITED_NOT_USED
+controller_runs,0
+endpoint_rows,0

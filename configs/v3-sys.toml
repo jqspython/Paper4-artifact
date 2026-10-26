@@ -1,4 +1,4 @@
-version = "artifact-v0.6-cancelled"
+version = "artifact-v0.7.0-cancelled"
 status = "CANCELLED_INCOMPLETE"
 design_decision_date = "2026-10-25"
 implementation = "USER_APPROVED_NAMED_D6_AMENDMENT_FLOAT64_GENERATOR"

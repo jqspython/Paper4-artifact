@@ -1,4 +1,4 @@
-# Paper4 code and selected workload identifiers
+# Paper4 code, selected workload identifiers and aggregate results
 
 Software artifact: https://github.com/jqspython/Paper4-artifact
 A repository or archive deposit is not performed by this exporter. Zenodo DOI: NOT_ASSIGNED.
@@ -105,8 +105,8 @@ The separately installable artifact image runs only the trace-free synthetic
 controller/monitor check. It can be loaded into the same kind cluster as a Job:
 
 ```sh
-docker build -f Dockerfile.artifact -t paper4-artifact:v0.6.1 .
-kind load docker-image paper4-artifact:v0.6.1 --name paper4-artifact
+docker build -f Dockerfile.artifact -t paper4-artifact:v0.7.0 .
+kind load docker-image paper4-artifact:v0.7.0 --name paper4-artifact
 kubectl apply -f sysbench/kind-artifact-check.yaml
 kubectl logs job/paper4-artifact-synthetic
 ```
@@ -115,12 +115,12 @@ A `PASS_SYNTHETIC_ONLY` Job log is an artifact wiring check. It is not a
 capacity qualification, workload replay, service-SLO result or replacement for
 the cancelled matrix.
 
-## Reused data and identifier files
+## Reused data, identifiers and aggregate results
 
 No raw archives, demand arrays, prefix numerical statistics, trained models,
-SQLite databases, replay CSV/JSONL logs or unpublished manuscript/review files
-are distributed. Only the following source-qualified identity/selection metadata
-are included; they contain no measured workload values:
+SQLite databases, replay request CSV/JSONL logs or unpublished manuscript/review
+files are distributed. The following source-qualified identity/selection metadata
+contain no measured workload values:
 
 - `data/processed/gate2/selected-unit-ids.csv`: original 150 exploratory IDs.
 - `data/processed/gate2/eligible-unit-pool.csv`: prefix-eligible ID frame only.
@@ -128,6 +128,16 @@ are included; they contain no measured workload values:
 - `results/v3-sys-fragment-ids.csv`: 12 design-frozen formal/reserve identities;
   the original `formal-proposed` role label is retained as provenance. Source/app,
   role, hash order, fixed window rule and selection seed are metadata, not outcomes.
+
+Seven machine-readable result tables are also included. They contain aggregate
+statistics and provenance fields, not per-application demand sequences or request
+schedules: `v2-lite-confirm-endpoints.csv`, `v2-lite-confirm-risk.csv`,
+`v2-lite-confirm-descriptive.csv`, `v1.1-static-reference-summary.csv`,
+`v1.1-lambda-diagnostic.csv`, `v1.1-azure2021-qualification.csv` and
+`v3-sys-closure.csv`. Each file is byte-bound to its named private result tag by
+the exporter. The static-reference table is post-hoc; the Azure 2021 table records
+an insufficient cohort and zero controller runs; the system closure is an
+incomplete engineering record rather than a service-SLO comparison.
 
 Huawei Private/Public 2023 are separate sources from the same cloud vendor.
 Official release: https://github.com/sir-lab/data-release

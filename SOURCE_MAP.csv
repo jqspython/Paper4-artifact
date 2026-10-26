@@ -23,6 +23,13 @@ paper4.py,source,none
 paper4_artifact_cli.py,source,none
 pyproject.toml,source,none
 requirements-gate2.txt,source,none
+results/v1.1-azure2021-qualification.csv,aggregate-result,none
+results/v1.1-lambda-diagnostic.csv,aggregate-result,none
+results/v1.1-static-reference-summary.csv,aggregate-result,none
+results/v2-lite-confirm-descriptive.csv,aggregate-result,none
+results/v2-lite-confirm-endpoints.csv,aggregate-result,none
+results/v2-lite-confirm-risk.csv,aggregate-result,none
+results/v3-sys-closure.csv,aggregate-result,none
 results/v3-sys-fragment-ids.csv,source,none
 scripts/__init__.py,generated,none
 scripts/analyze_gate2.py,source,none

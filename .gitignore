@@ -14,3 +14,10 @@ __pycache__/
 *.jsonl
 /results/*
 !/results/v3-sys-fragment-ids.csv
+!/results/v2-lite-confirm-endpoints.csv
+!/results/v2-lite-confirm-risk.csv
+!/results/v2-lite-confirm-descriptive.csv
+!/results/v1.1-static-reference-summary.csv
+!/results/v1.1-lambda-diagnostic.csv
+!/results/v1.1-azure2021-qualification.csv
+!/results/v3-sys-closure.csv

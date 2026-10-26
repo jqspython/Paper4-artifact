@@ -1,0 +1,15 @@
+metric,value
+contract_pairs,2912
+lambda_min_min,-7.2450000000002
+lambda_min_max,0.0
+lambda_safe,-16
+below_lambda_safe,0
+at_or_below_lambda_safe,0
+below_minus_8,0
+at_or_below_minus_8,0
+cost_ratio_gt_1.25_pairs,95
+cost_ratio_gt_1.25_fraction,0.032623626373626376
+tail_lambda_min_median,-3.645000000000575
+pearson_cost_ratio_lambda_min,-0.8114663708665262
+lambda_recovery_per_no_loss_minute,0.005000000000000001
+minutes_per_one_lambda_recovery,199.99999999999997

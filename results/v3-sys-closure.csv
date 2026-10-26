@@ -1,0 +1,30 @@
+metric,value,unit,provenance
+attempts,10,attempts,v0.19-execution-v3-exhausted-stop:results/v3-sys-attempts.csv
+invalid,7,attempts,v0.19-execution-v3-exhausted-stop:results/v3-sys-attempts.csv
+historical_complete,3,attempts,v0.19-execution-v3-exhausted-stop:results/v3-sys-attempts.csv
+superseded,1,attempts,v0.19-execution-v3-exhausted-stop:results/v3-sys-attempts.csv
+current_complete,2,slots,same ledger; latest state
+planned_slots,78,slots,v3-sys-execution-v3:results/v3-sys-manifest.csv
+untouched,75,slots,same ledger
+plan_failures,3,attempts,same ledger
+startup_failures,4,attempts,same ledger
+early_properties,64,checks,v0.12-poisson-capacity-stop:docs/v3-sys-protocol.md
+component_seconds,300,component count,v3-sys-design-v2:results/v3-sys-component-r2-refresh.csv
+plus_two_actions,2,component count,v3-sys-design-v2:results/v3-sys-component-r2-refresh.csv
+blocked_ticks,3,component count,v3-sys-design-v2:results/v3-sys-component-r2-refresh.csv
+monitor_flags,0,component count,v3-sys-design-v2:results/v3-sys-component-r2-refresh.csv
+downscale_deletions,4,pods,retained component lifecycle; excludes final cleanup
+constant_p95,2.408212,ms,v3-sys-calibration.csv
+poisson_p95,58.584844,ms,v3-sys-gates.csv
+imbalance,2.0872075043809915,ratio,v3-sys-capacity.csv
+fault_planned,22230,requests,v3-fault-002-a3 retained request CSV
+fault_missing,14044,requests,same; written_ns < 0
+fault_missing_percent,63.17588843904633,percent,same
+fault_failed,17530,requests,v0.21-execution-results-summary:docs/v3-sys-execution-review.md; includes fault_missing
+fault_success,4700,requests,same; fault_planned minus fault_failed
+fault_slo_nonempty_windows,16,windows,same; request windows assigned by planned send time
+fault_slo_violating_windows,16,windows,same; p95 above threshold or failure
+fault_slo_empty_windows,224,windows,same; excluded from SLO denominator
+minimum_slot_gap_ms,774.801058,ms,same; scheduled offsets by transport_id
+certificate_error,1.4210854715202004e-14,absolute,retained cap4 tick identity
+monitor_detection_ticks,0,ticks,v0.21-execution-results-summary:docs/v3-sys-execution-review.md; independent boundaries61/61
