@@ -64,7 +64,8 @@ paper4-reproduce-synthetic
 `paper4-replay` recomputes controller decisions from a supplied tick CSV or a
 trace-free built-in fixture; it is not the cancelled live workload matrix.
 `paper4-wrapper` exposes one wrapper decision, while `paper4-monitor` recomputes
-contract flags and a certificate. `make reproduce-synthetic` invokes the same
+observed contract loss and flags. The synthetic wrapper check also verifies its
+conditional certificate arithmetic. `make reproduce-synthetic` invokes the same
 bounded fixture as `python -B -X utf8 -m paper4_artifact_cli` and
 `paper4-reproduce-synthetic`; this direct Python form is available when Make is
 not installed. A PASS is an engineering check, not a trace result.
@@ -104,8 +105,8 @@ The separately installable artifact image runs only the trace-free synthetic
 controller/monitor check. It can be loaded into the same kind cluster as a Job:
 
 ```sh
-docker build -f Dockerfile.artifact -t paper4-artifact:v0.6 .
-kind load docker-image paper4-artifact:v0.6 --name paper4-artifact
+docker build -f Dockerfile.artifact -t paper4-artifact:v0.6.1 .
+kind load docker-image paper4-artifact:v0.6.1 --name paper4-artifact
 kubectl apply -f sysbench/kind-artifact-check.yaml
 kubectl logs job/paper4-artifact-synthetic
 ```

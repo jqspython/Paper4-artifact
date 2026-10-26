@@ -12,6 +12,6 @@ spec:
       restartPolicy: Never
       containers:
         - name: artifact
-          image: paper4-artifact:v0.6
+          image: paper4-artifact:v0.6.1
           imagePullPolicy: Never
           command: ["paper4-reproduce-synthetic"]

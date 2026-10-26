@@ -77,7 +77,7 @@ def wrapper_main(argv=None):
 
 
 def monitor_main(argv=None):
-    parser = argparse.ArgumentParser(description="Recompute contract flags and certificate from tick records")
+    parser = argparse.ArgumentParser(description="Recompute observed contract loss and flags from tick records")
     parser.add_argument("--input", help="CSV accepted by paper4-replay; defaults to a trace-free synthetic fixture")
     parser.add_argument("--capacity-rps", type=float, default=10.)
     args = parser.parse_args(argv)
