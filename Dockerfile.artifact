@@ -1,0 +1,8 @@
+FROM python:3.11-slim
+
+WORKDIR /artifact
+COPY pyproject.toml paper4_artifact_cli.py ./
+COPY sysbench ./sysbench
+RUN python -m pip install --no-cache-dir .
+
+ENTRYPOINT ["paper4-reproduce-synthetic"]

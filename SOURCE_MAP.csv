@@ -1,6 +1,8 @@
 path,origin,root_relocation
 .gitignore,generated,none
+Dockerfile.artifact,source,none
 LICENSE,generated,none
+Makefile,source,none
 README.md,generated,none
 SOURCE_MAP.csv,generated,none
 THIRD_PARTY_NOTICES.md,generated,none
@@ -18,6 +20,8 @@ gate2_pac.py,source,none
 gate2_runner.py,source,none
 gate2_wrapper.py,source,none
 paper4.py,source,none
+paper4_artifact_cli.py,source,none
+pyproject.toml,source,none
 requirements-gate2.txt,source,none
 results/v3-sys-fragment-ids.csv,source,none
 scripts/__init__.py,generated,none
@@ -40,6 +44,7 @@ sysbench/execute.py,source,none
 sysbench/feasibility.py,source,none
 sysbench/fragments.py,source,none
 sysbench/gates.py,source,none
+sysbench/kind-artifact-check.yaml,source,none
 sysbench/kind-service.yaml,source,none
 sysbench/kind.yaml,source,none
 sysbench/loaded_startup.py,source,none
@@ -54,6 +59,7 @@ sysbench/runtime.py,source,none
 sysbench/service.py,source,none
 sysbench/steady.js,source,none
 tests/check_delayed_bound.py,source,none
+tests/test_artifact_cli.py,source,none
 tests/test_cdt.py,source,none
 tests/test_core.py,source,none
 tests/test_gate2_kernel.py,source,none

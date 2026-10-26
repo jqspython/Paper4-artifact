@@ -1,0 +1,17 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: paper4-artifact-synthetic
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: paper4-artifact-synthetic
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: artifact
+          image: paper4-artifact:v0.6
+          imagePullPolicy: Never
+          command: ["paper4-reproduce-synthetic"]

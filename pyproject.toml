@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paper4-artifact"
+version = "0.6.0"
+description = "Trace-free controller, replay and contract-monitor artifact for Paper4"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+
+[project.scripts]
+paper4-replay = "paper4_artifact_cli:replay_main"
+paper4-wrapper = "paper4_artifact_cli:wrapper_main"
+paper4-monitor = "paper4_artifact_cli:monitor_main"
+paper4-reproduce-synthetic = "paper4_artifact_cli:synthetic_main"
+
+[tool.setuptools]
+py-modules = ["paper4_artifact_cli"]
+
+[tool.setuptools.packages.find]
+include = ["sysbench*"]
