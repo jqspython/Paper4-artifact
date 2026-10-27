@@ -59,6 +59,8 @@ paper4-replay
 paper4-wrapper --y-count 20 --n-start 1 --base-request 2
 paper4-monitor
 paper4-reproduce-synthetic
+paper4-monitor-matrix --output work/e-b-monitor-summary.csv
+paper4-regenerate-manuscript --input-dir results --output-dir work/reproduced --manuscript /path/to/submission.md
 ```
 
 `paper4-replay` recomputes controller decisions from a supplied tick CSV or a
@@ -69,6 +71,17 @@ conditional certificate arithmetic. `make reproduce-synthetic` invokes the same
 bounded fixture as `python -B -X utf8 -m paper4_artifact_cli` and
 `paper4-reproduce-synthetic`; this direct Python form is available when Make is
 not installed. A PASS is an engineering check, not a trace result.
+
+`paper4-monitor-matrix` runs 27 deterministic synthetic fault trajectories and
+1,000 contract-valid trajectories. It tests monitor wiring only, without trace,
+container or service traffic. `paper4-regenerate-manuscript` reads exactly the
+seven public aggregate CSVs and emits Table 3--7 and Figure 1 data plus a cellwise
+comparison. The current public inputs reproduce 167 source-text cells with zero
+differences, but honestly return `INPUT_INCOMPLETE`: Table 7 lacks direct paid-sum
+sufficient statistics and Figure 1 lacks the exploration series; plotted interval
+endpoints are not numeric source text. Do not describe this release as complete
+numerical manuscript regeneration. The unpublished manuscript is not bundled;
+pass an authorized local source path to the comparator.
 
 Tests construct their own synthetic arrays/SQLite fixtures and do not evaluate
 scientific workload outcomes. The optional upstream PAC parity check skips when
@@ -105,8 +118,8 @@ The separately installable artifact image runs only the trace-free synthetic
 controller/monitor check. It can be loaded into the same kind cluster as a Job:
 
 ```sh
-docker build -f Dockerfile.artifact -t paper4-artifact:v0.7.0 .
-kind load docker-image paper4-artifact:v0.7.0 --name paper4-artifact
+docker build -f Dockerfile.artifact -t paper4-artifact:v0.8.0 .
+kind load docker-image paper4-artifact:v0.8.0 --name paper4-artifact
 kubectl apply -f sysbench/kind-artifact-check.yaml
 kubectl logs job/paper4-artifact-synthetic
 ```

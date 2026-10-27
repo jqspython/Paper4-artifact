@@ -21,6 +21,8 @@ gate2_runner.py,source,none
 gate2_wrapper.py,source,none
 paper4.py,source,none
 paper4_artifact_cli.py,source,none
+paper4_monitor_matrix.py,source,none
+paper4_public_reproduce.py,source,none
 pyproject.toml,source,none
 requirements-gate2.txt,source,none
 results/v1.1-azure2021-qualification.csv,aggregate-result,none
@@ -45,6 +47,7 @@ sysbench/analyze.py,source,none
 sysbench/arrival.py,source,none
 sysbench/calibrate.py,source,none
 sysbench/component.py,source,none
+sysbench/contract_assumption.py,source,none
 sysbench/control.py,source,none
 sysbench/crosscheck.js,source,none
 sysbench/execute.py,source,none
@@ -69,6 +72,7 @@ tests/check_delayed_bound.py,source,none
 tests/test_artifact_cli.py,source,none
 tests/test_cdt.py,source,none
 tests/test_core.py,source,none
+tests/test_engineering_additions.py,source,none
 tests/test_gate2_kernel.py,source,none
 tests/test_gate2_pac.py,source,none
 tests/test_gate2_runner.py,source,none
